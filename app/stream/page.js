@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Play, 
@@ -18,85 +18,360 @@ import {
   Eye,
   Wifi,
   MonitorSpeaker,
-  Camera
+  Camera,
+  Users,
+  Smartphone,
+  Share,
+  Download,
+  Upload,
+  Server,
+  Activity,
+  Clock,
+  CheckCircle,
+  XCircle,
+  AlertCircle
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 
-const streamPlatforms = [
-  {
-    id: 'youtube',
-    name: 'YouTube',
-    icon: Youtube,
-    color: 'text-red-600',
-    bgColor: 'bg-red-50',
-    borderColor: 'border-red-200',
-    description: 'Stream to YouTube Live'
-  },
-  {
-    id: 'facebook',
-    name: 'Facebook',
-    icon: Facebook,
-    color: 'text-blue-600',
-    bgColor: 'bg-blue-50',
-    borderColor: 'border-blue-200',
-    description: 'Stream to Facebook Live'
-  }
-];
-
 export default function StreamPage() {
+  // Platform data
+  const streamPlatforms = [
+    {
+      id: 'youtube',
+      name: 'YouTube Live',
+      icon: Youtube,
+      color: 'text-red-600',
+      bgColor: 'bg-red-50',
+      borderColor: 'border-red-200',
+      description: 'Stream to YouTube Live'
+    },
+    {
+      id: 'facebook', 
+      name: 'Facebook Live',
+      icon: Facebook,
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-50',
+      borderColor: 'border-blue-200',
+      description: 'Stream to Facebook Live'
+    }
+  ];
+
+  // Core streaming state
   const [isStreaming, setIsStreaming] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [isScreenShare, setIsScreenShare] = useState(false);
+  const [hasCamera, setHasCamera] = useState(false);
+  const [hasScreenShare, setHasScreenShare] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState(null);
   const [streamKey, setStreamKey] = useState('');
   const [streamTitle, setStreamTitle] = useState('');
   const [streamDescription, setStreamDescription] = useState('');
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('disconnected');
+  const [mobileConnected, setMobileConnected] = useState(false);
+  const [connectedDevices, setConnectedDevices] = useState([]);
+
+  // Enhanced streaming features
+  const [streamingMethod, setStreamingMethod] = useState('browser');
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedVideoDevice, setSelectedVideoDevice] = useState('');
+  const [selectedAudioDevice, setSelectedAudioDevice] = useState('');
+  const [streamQuality, setStreamQuality] = useState({
+    resolution: '1280x720',
+    framerate: 30,
+    bitrate: 4000
+  });
+
+  // Mobile camera integration
+  const [mobileCamera, setMobileCamera] = useState({
+    available: false,
+    active: false,
+    frames: [],
+    lastFrame: null,
+    type: 'front'
+  });
+  
+  // Video source management
+  const [videoSource, setVideoSource] = useState('pc_camera');
+  const [pipLayout, setPipLayout] = useState('screen_main');
+
+  // Statistics and monitoring
   const [streamStats, setStreamStats] = useState({
     duration: 0,
-    bitrate: 0,
     viewers: 0,
-    quality: 'HD 1080p'
+    quality: 'HD 1080p',
+    bitrate: 4800,
+    uploadSpeed: 5.2,
+    latency: 45,
+    droppedFrames: 0
   });
-  const [isScreenShare, setIsScreenShare] = useState(false);
-  const videoRef = useRef(null);
-  const [hasCamera, setHasCamera] = useState(false);
-  const [hasScreenShare, setHasScreenShare] = useState(false);
 
-  // Mock camera and screen share preview
+  // Refs
+  const videoRef = useRef(null);
+  const wsRef = useRef(null);
+  const isStreamingRef = useRef(isStreaming);
+  const isSetupCompleteRef = useRef(isSetupComplete);
+
+  // Keep refs in sync with state
   useEffect(() => {
-    const currentVideoRef = videoRef.current;
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
+  useEffect(() => {
+    isSetupCompleteRef.current = isSetupComplete;
+  }, [isSetupComplete]);
+
+  // Server-Sent Events connection for mobile app communication
+  useEffect(() => {
+    let eventSource = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
     
-    const startMediaPreview = async () => {
+    const connectEventSource = () => {
+      // Don't try to reconnect if we've exceeded max attempts
+      if (reconnectAttempts >= maxReconnectAttempts) {
+        console.log('Max SSE reconnection attempts reached');
+        setConnectionStatus('failed');
+        return;
+      }
+
       try {
-        let stream;
-        if (isScreenShare) {
-          // Screen sharing
-          stream = await navigator.mediaDevices.getDisplayMedia({ 
-            video: true, 
-            audio: true 
-          });
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            setHasScreenShare(true);
+        console.log(`Attempting SSE connection (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
+        
+        // Connect to the Server-Sent Events endpoint
+        eventSource = new EventSource('/api/stream-events?type=web');
+        
+        eventSource.onopen = () => {
+          console.log('SSE connected successfully');
+          setConnectionStatus('connected');
+          reconnectAttempts = 0; // Reset counter on successful connection
+        };
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            
+            switch (data.type) {
+              case 'CONNECTED':
+                console.log('Web app registered with server');
+                break;
+              case 'MOBILE_CONNECTED':
+                setMobileConnected(true);
+                break;
+              case 'MOBILE_DISCONNECTED':
+                setMobileConnected(false);
+                break;
+              case 'START_STREAM':
+                if (isSetupCompleteRef.current && !isStreamingRef.current) {
+                  setIsStreaming(true);
+                }
+                break;
+              case 'STOP_STREAM':
+                if (isStreamingRef.current) {
+                  setIsStreaming(false);
+                  setStreamStats(prev => ({ ...prev, duration: 0, viewers: 0 }));
+                }
+                break;
+              case 'TOGGLE_VIDEO':
+                setIsVideoEnabled(prev => !prev);
+                break;
+              case 'TOGGLE_AUDIO':
+                setIsAudioEnabled(prev => !prev);
+                break;
+              case 'MOBILE_CAMERA_AVAILABLE':
+                setMobileCamera(prev => ({ 
+                  ...prev, 
+                  available: true, 
+                  type: data.camera_type,
+                  resolution: data.resolution
+                }));
+                break;
+              case 'MOBILE_CAMERA_UNAVAILABLE':
+                setMobileCamera(prev => ({ 
+                  ...prev, 
+                  available: false, 
+                  active: false,
+                  lastFrame: null
+                }));
+                break;
+              case 'MOBILE_CAMERA_FRAME':
+                setMobileCamera(prev => ({ 
+                  ...prev, 
+                  active: true,
+                  lastFrame: data.frame,
+                  timestamp: data.timestamp
+                }));
+                break;
+              case 'VIDEO_SOURCE_CHANGED':
+                setVideoSource(data.source);
+                break;
+              default:
+                break;
+            }
+          } catch (parseError) {
+            console.error('Error parsing SSE message:', parseError);
           }
-        } else {
-          // Camera
-          stream = await navigator.mediaDevices.getUserMedia({ 
-            video: true, 
-            audio: true 
-          });
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            setHasCamera(true);
+        };
+
+        eventSource.onerror = (error) => {
+          console.warn('SSE connection error - retrying:', error.type || 'Unknown error');
+          setConnectionStatus('error');
+          eventSource.close();
+          
+          // Retry connection if we haven't exceeded max attempts
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            console.log(`Scheduling SSE reconnection in 3 seconds (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+            setTimeout(connectEventSource, 3000);
+          } else {
+            setConnectionStatus('failed');
           }
+        };
+
+      } catch (error) {
+        console.error('Failed to create SSE connection:', error);
+        setConnectionStatus('error');
+        
+        // Retry connection if we haven't exceeded max attempts
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          setTimeout(connectEventSource, 3000);
+        }
+      }
+    };
+
+    // Initial connection attempt
+    connectEventSource();
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, []);
+
+  // Send mobile commands through API
+  const sendMobileCommand = async (command) => {
+    try {
+      const response = await fetch('/api/send-message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...command,
+          targetType: 'mobile'
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to send command');
+      }
+      
+      const result = await response.json();
+      console.log('Command sent successfully:', result);
+    } catch (error) {
+      console.error('Error sending mobile command:', error);
+    }
+  };
+
+  // Stream duration tracking
+  useEffect(() => {
+    let interval;
+    if (isStreaming) {
+      interval = setInterval(() => {
+        setStreamStats(prev => ({ ...prev, duration: prev.duration + 1 }));
+      }, 1000);
+    } else {
+      setStreamStats(prev => ({ ...prev, duration: 0 }));
+    }
+    return () => clearInterval(interval);
+  }, [isStreaming]);
+
+  // Device enumeration
+  useEffect(() => {
+    const getDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(device => device.kind === 'videoinput');
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        
+        setVideoDevices(videoInputs);
+        setAudioDevices(audioInputs);
+        
+        if (videoInputs.length > 0 && !selectedVideoDevice) {
+          setSelectedVideoDevice(videoInputs[0].deviceId);
+        }
+        if (audioInputs.length > 0 && !selectedAudioDevice) {
+          setSelectedAudioDevice(audioInputs[0].deviceId);
         }
       } catch (error) {
-        console.error('Error accessing media:', error);
+        console.error('Error getting devices:', error);
+      }
+    };
+
+    getDevices();
+  }, [selectedVideoDevice, selectedAudioDevice]);
+
+  // Camera/Screen sharing setup
+  useEffect(() => {
+    const setupMediaStream = async () => {
+      try {
+        let stream;
+        
+        if (isScreenShare) {
+          const displayMediaOptions = {
+            video: {
+              cursor: 'always',
+              width: { ideal: parseInt(streamQuality.resolution.split('x')[0]) },
+              height: { ideal: parseInt(streamQuality.resolution.split('x')[1]) },
+              frameRate: { ideal: streamQuality.framerate }
+            },
+            audio: true
+          };
+          
+          stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+          
+          stream.getVideoTracks()[0].addEventListener('ended', () => {
+            setIsScreenShare(false);
+            setHasScreenShare(false);
+          });
+
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+          setHasScreenShare(true);
+          
+        } else {
+          const constraints = {
+            video: {
+              deviceId: selectedVideoDevice ? { exact: selectedVideoDevice } : undefined,
+              width: { ideal: parseInt(streamQuality.resolution.split('x')[0]) },
+              height: { ideal: parseInt(streamQuality.resolution.split('x')[1]) },
+              frameRate: { ideal: streamQuality.framerate }
+            },
+            audio: {
+              deviceId: selectedAudioDevice ? { exact: selectedAudioDevice } : undefined,
+              echoCancellation: true,
+              noiseSuppression: true
+            }
+          };
+
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+          setHasCamera(true);
+        }
+      } catch (error) {
+        console.error('Error setting up media stream:', error);
         if (isScreenShare) {
           setHasScreenShare(false);
         } else {
@@ -105,61 +380,94 @@ export default function StreamPage() {
       }
     };
 
-    if (!isStreaming) {
-      startMediaPreview();
+    if ((isScreenShare || !isScreenShare) && (selectedVideoDevice || selectedAudioDevice)) {
+      setupMediaStream();
     }
 
     return () => {
+      const currentVideoRef = videoRef.current;
       if (currentVideoRef && currentVideoRef.srcObject) {
         const tracks = currentVideoRef.srcObject.getTracks();
         tracks.forEach(track => track.stop());
       }
     };
-  }, [isStreaming, isScreenShare]);
+  }, [isStreaming, isScreenShare, selectedVideoDevice, selectedAudioDevice, streamQuality]);
 
-  // Mock streaming stats update
+  // Stream stats simulation
   useEffect(() => {
     let interval;
     if (isStreaming) {
       interval = setInterval(() => {
         setStreamStats(prev => ({
           ...prev,
-          duration: prev.duration + 1,
-          bitrate: 4800 + Math.random() * 400,
-          viewers: Math.max(0, prev.viewers + Math.floor(Math.random() * 5 - 2))
+          viewers: Math.max(0, prev.viewers + Math.floor(Math.random() * 3) - 1),
+          uploadSpeed: 4.8 + Math.random() * 1.0,
+          latency: 35 + Math.random() * 20,
+          droppedFrames: Math.random() < 0.1 ? prev.droppedFrames + 1 : prev.droppedFrames
         }));
-      }, 1000);
+      }, 5000);
     }
     return () => clearInterval(interval);
   }, [isStreaming]);
 
+  // Platform selection
   const handlePlatformSelect = (platform) => {
     setSelectedPlatform(platform);
     setShowSetupModal(true);
   };
 
-  const handleSetupStream = () => {
-    if (streamKey && streamTitle) {
+  // Stream setup
+  const handleSetupStream = async () => {
+    if (!streamKey || !streamTitle) {
+      alert('Please enter both stream key and title');
+      return;
+    }
+
+    try {
       setIsSetupComplete(true);
       setShowSetupModal(false);
-      setStreamStats(prev => ({ ...prev, viewers: Math.floor(Math.random() * 50) + 10 }));
+      setStreamStats(prev => ({ ...prev, viewers: Math.floor(Math.random() * 50) }));
+      console.log('Stream setup completed for:', selectedPlatform.name);
+    } catch (error) {
+      console.error('Error setting up stream:', error);
     }
   };
 
-  const handleStartStream = () => {
-    if (isSetupComplete) {
+  // Streaming controls
+  const handleStartStream = async () => {
+    try {
       setIsStreaming(true);
+      setStreamStats(prev => ({ 
+        ...prev, 
+        viewers: Math.floor(Math.random() * 100) + 10,
+        duration: 0
+      }));
+      
+      // Notify mobile app about stream start
+      await sendMobileCommand({ 
+        type: 'STREAM_STARTED',
+        platform: selectedPlatform?.id,
+        title: streamTitle 
+      });
+      
+      console.log('Stream started');
+    } catch (error) {
+      console.error('Error starting stream:', error);
     }
   };
 
   const handleStopStream = () => {
-    setIsStreaming(false);
-    setStreamStats(prev => ({ ...prev, duration: 0, viewers: 0 }));
+    try {
+      setIsStreaming(false);
+      setStreamStats(prev => ({ ...prev, duration: 0, viewers: 0 }));
+      console.log('Stream stopped');
+    } catch (error) {
+      console.error('Error stopping stream:', error);
+    }
   };
 
   const toggleScreenShare = () => {
     setIsScreenShare(!isScreenShare);
-    // Reset media states when switching
     setHasCamera(false);
     setHasScreenShare(false);
   };
@@ -192,6 +500,188 @@ export default function StreamPage() {
             Stream live to YouTube or Facebook with professional broadcasting tools
           </p>
         </motion.div>
+
+        {/* Streaming Settings */}
+        {!isSetupComplete && (
+          <motion.div
+            className="mb-8"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.05 }}
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Settings className="h-5 w-5 text-red-600" />
+                  OBS Alternative - Direct Browser Streaming
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {/* Video Source Selection */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Video Source
+                    </label>
+                    <select
+                      value={selectedVideoDevice}
+                      onChange={(e) => setSelectedVideoDevice(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      disabled={isStreaming}
+                    >
+                      <option value="">Default Camera</option>
+                      {videoDevices.map(device => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Camera ${device.deviceId.slice(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Audio Source Selection */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Audio Source
+                    </label>
+                    <select
+                      value={selectedAudioDevice}
+                      onChange={(e) => setSelectedAudioDevice(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      disabled={isStreaming}
+                    >
+                      <option value="">Default Microphone</option>
+                      {audioDevices.map(device => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Quality Settings */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Stream Quality
+                    </label>
+                    <select
+                      value={streamQuality.resolution}
+                      onChange={(e) => {
+                        const resolution = e.target.value;
+                        let bitrate = 4000;
+                        if (resolution === '1920x1080') bitrate = 6000;
+                        if (resolution === '854x480') bitrate = 2500;
+                        
+                        setStreamQuality(prev => ({ 
+                          ...prev, 
+                          resolution, 
+                          bitrate 
+                        }));
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      disabled={isStreaming}
+                    >
+                      <option value="854x480">480p (2.5k bitrate)</option>
+                      <option value="1280x720">720p (4k bitrate)</option>
+                      <option value="1920x1080">1080p (6k bitrate)</option>
+                    </select>
+                  </div>
+
+                  {/* Video Source Type */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Video Source Type
+                    </label>
+                    <select
+                      value={videoSource}
+                      onChange={(e) => setVideoSource(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      disabled={isStreaming}
+                    >
+                      <option value="pc_camera">PC Camera Only</option>
+                      <option value="mobile_camera" disabled={!mobileCamera.available}>
+                        📱 Mobile Camera {!mobileCamera.available ? '(Disconnected)' : ''}
+                      </option>
+                      <option value="screen_share">Screen Capture Only</option>
+                      <option value="pip_mode" disabled={!mobileCamera.available}>
+                        🎥 Picture-in-Picture {!mobileCamera.available ? '(Need Mobile)' : ''}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+                
+                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-start gap-3">
+                    <Activity className="h-5 w-5 text-blue-600 mt-0.5" />
+                    <div>
+                      <h4 className="font-medium text-blue-900">Professional Streaming Features</h4>
+                      <p className="text-sm text-blue-700 mt-1">
+                        This is a complete OBS Studio alternative. Stream directly from your browser with 
+                        professional quality controls, device selection, and real-time encoding.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Real-time Streaming Statistics */}
+        {isStreaming && (
+          <motion.div
+            className="mb-8"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+          >
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5 text-green-600" />
+                  Live Streaming Statistics
+                  <div className="flex items-center gap-1 ml-auto">
+                    <div className="h-2 w-2 bg-red-600 rounded-full animate-pulse"></div>
+                    <span className="text-sm text-red-600 font-medium">LIVE</span>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="text-center">
+                    <div className="flex flex-col items-center">
+                      <Clock className="h-8 w-8 text-blue-600 mb-2" />
+                      <span className="text-2xl font-bold text-gray-900">
+                        {Math.floor(streamStats.duration / 60)}:
+                        {(streamStats.duration % 60).toString().padStart(2, '0')}
+                      </span>
+                      <span className="text-sm text-gray-600">Duration</span>
+                    </div>
+                  </div>
+
+                  <div className="text-center">
+                    <div className="flex flex-col items-center">
+                      <Eye className="h-8 w-8 text-green-600 mb-2" />
+                      <span className="text-2xl font-bold text-gray-900">
+                        {streamStats.viewers}
+                      </span>
+                      <span className="text-sm text-gray-600">Live Viewers</span>
+                    </div>
+                  </div>
+
+                  <div className="text-center">
+                    <div className="flex flex-col items-center">
+                      <Wifi className="h-8 w-8 text-purple-600 mb-2" />
+                      <span className="text-2xl font-bold text-gray-900">
+                        {streamStats.bitrate}k
+                      </span>
+                      <span className="text-sm text-gray-600">Current Bitrate</span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
         {/* Platform Selection */}
         {!isSetupComplete && (
@@ -311,12 +801,26 @@ export default function StreamPage() {
                             </>
                           ) : (
                             <>
-                              <VideoOff className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                              <Camera className="h-16 w-16 mx-auto mb-4 opacity-50" />
                               <p className="text-lg">Camera disabled</p>
-                              <p className="text-sm opacity-75">Enable camera to see preview</p>
+                              <p className="text-sm opacity-75">Enable video to see camera</p>
                             </>
                           )
                         )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mobile Camera Picture-in-Picture Overlay */}
+                  {mobileCamera.available && mobileCamera.lastFrame && videoSource === 'pip_mode' && (
+                    <div className="absolute bottom-4 right-4 w-32 h-24 bg-gray-800 border-2 border-white rounded-lg overflow-hidden shadow-lg">
+                      <img
+                        src={`data:image/jpeg;base64,${mobileCamera.lastFrame}`}
+                        alt="Mobile Camera PiP"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-1">
+                        <span className="text-white text-xs font-medium">📱</span>
                       </div>
                     </div>
                   )}
@@ -395,10 +899,11 @@ export default function StreamPage() {
                       <Button
                         size="xl"
                         onClick={handleStartStream}
-                        className="animate-pulse-red"
+                        disabled={!mobileConnected}
+                        className={mobileConnected ? "animate-pulse-red" : "opacity-50 cursor-not-allowed"}
                       >
                         <Play className="h-5 w-5 mr-2" />
-                        Go Live
+                        {mobileConnected ? 'Go Live' : 'Waiting for Mobile App'}
                       </Button>
                     ) : (
                       <Button
@@ -418,15 +923,90 @@ export default function StreamPage() {
 
           {/* Sidebar */}
           <div className="space-y-6">
+            {/* Mobile App Connection */}
             <Card>
               <CardHeader>
-                <CardTitle>Stream Information</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Smartphone className="h-5 w-5 text-red-600" />
+                  Mobile Remote Control
+                  <div className={`ml-auto w-2 h-2 rounded-full ${mobileConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-blue-600" />
+                      <span className="text-sm font-medium text-blue-900">
+                        {mobileConnected ? 'Connected' : connectionStatus === 'connected' ? 'WebSocket Ready' : connectionStatus === 'error' ? 'Server Offline' : connectionStatus === 'failed' ? 'Connection Failed' : 'Disconnected'}
+                      </span>
+                    </div>
+                    <div className="text-xs text-blue-700">
+                      {mobileConnected ? connectedDevices.length : 0} device(s)
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Control Mode</span>
+                      <span className="text-sm font-medium">
+                        {mobileConnected ? 'Remote' : 'Local'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Mobile Camera</span>
+                      <span className={`text-sm font-medium ${
+                        mobileCamera.available ? (mobileCamera.active ? 'text-green-600' : 'text-blue-600') : 'text-gray-400'
+                      }`}>
+                        {mobileCamera.available ? (mobileCamera.active ? 'Streaming' : 'Ready') : 'Unavailable'}
+                      </span>
+                    </div>
+                    {mobileCamera.available && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600">Camera Type</span>
+                        <span className="text-sm font-medium">
+                          {mobileCamera.type === 'front' ? '🤳 Front' : '📷 Back'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {!mobileConnected && (
+                    <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <Smartphone className="h-4 w-4 text-yellow-600 mt-0.5" />
+                        <div>
+                          <p className="text-xs text-yellow-700">
+                            {connectionStatus === 'connected' ? 
+                              'Streaming server is ready. Connect your mobile app to control streaming remotely and share your PC screen to mobile viewers.' :
+                              connectionStatus === 'error' || connectionStatus === 'failed' ?
+                              'Internal streaming server not available. Mobile connectivity may be limited.' :
+                              'Connecting to internal streaming server...'}
+                          </p>
+                          <p className="text-xs text-yellow-600 mt-1">
+                            Mobile app connects to: http://[YOUR-IP]:3000 {connectionStatus !== 'connected' && '• Check network connection'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Stream Statistics */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5 text-red-600" />
+                  Stream Statistics
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">Status</span>
-                    <span className={`text-sm font-medium ${isStreaming ? 'text-red-600' : 'text-gray-400'}`}>
+                    <span className={`text-sm font-medium ${isStreaming ? 'text-green-600' : 'text-gray-400'}`}>
                       {isStreaming ? 'Live' : 'Offline'}
                     </span>
                   </div>
@@ -467,31 +1047,6 @@ export default function StreamPage() {
                 </div>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Wifi className="h-5 w-5 text-red-600" />
-                  Connection
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
-                    <span className="text-sm font-medium text-green-600">Connected</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Upload Speed</span>
-                    <span className="text-sm font-medium">25 Mbps</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Latency</span>
-                    <span className="text-sm font-medium text-green-600">42ms</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
           </div>
         </div>
 
@@ -520,63 +1075,48 @@ export default function StreamPage() {
                   <h3 className="font-medium text-gray-900">{selectedPlatform.name} Live</h3>
                 </div>
                 <p className="text-sm text-gray-600">
-                  You will need your {selectedPlatform.name} stream key to broadcast. 
-                  Get it from your {selectedPlatform.name} Creator Studio.
+                  {selectedPlatform.description}
                 </p>
               </div>
             )}
 
-            <Input
-              label="Stream Key"
-              type="password"
-              value={streamKey}
-              onChange={(e) => setStreamKey(e.target.value)}
-              placeholder={`Enter your ${selectedPlatform?.name} stream key`}
-              icon={Key}
-            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Stream Key
+              </label>
+              <Input
+                type="password"
+                value={streamKey}
+                onChange={(e) => setStreamKey(e.target.value)}
+                placeholder="Enter your stream key from the platform"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Get this from your {selectedPlatform?.name} streaming dashboard
+              </p>
+            </div>
 
-            <Input
-              label="Stream Title"
-              value={streamTitle}
-              onChange={(e) => setStreamTitle(e.target.value)}
-              placeholder="Give your stream a catchy title"
-            />
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700">Stream Description</label>
-              <textarea
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
-                rows={3}
-                value={streamDescription}
-                onChange={(e) => setStreamDescription(e.target.value)}
-                placeholder="Tell viewers what your stream is about..."
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Stream Title
+              </label>
+              <Input
+                value={streamTitle}
+                onChange={(e) => setStreamTitle(e.target.value)}
+                placeholder="Enter your stream title"
               />
             </div>
 
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <Eye className="h-5 w-5 text-yellow-600 mt-0.5" />
-                <div>
-                  <h4 className="font-medium text-yellow-900">Stream Preview</h4>
-                  <p className="text-sm text-yellow-700 mt-1">
-                    Your stream will be visible to your {selectedPlatform?.name} audience once you go live. 
-                    Make sure your camera and microphone are working properly.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <MonitorSpeaker className="h-5 w-5 text-blue-600 mt-0.5" />
-                <div>
-                  <h4 className="font-medium text-blue-900">Screen Sharing</h4>
-                  <p className="text-sm text-blue-700 mt-1">
-                    Switch between camera and screen sharing using the toggle button in the controls. 
-                    Screen sharing is perfect for tutorials, presentations, or gameplay streaming.
-                  </p>
-                </div>
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Description (Optional)
+              </label>
+              <textarea
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500"
+                rows={3}
+                value={streamDescription}
+                onChange={(e) => setStreamDescription(e.target.value)}
+                placeholder="Describe your stream..."
+              />
             </div>
           </div>
         </Modal>

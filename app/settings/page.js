@@ -142,7 +142,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Bio</label>
             <textarea
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
               rows={3}
               value={settings.bio}
               onChange={(e) => updateSetting('bio', e.target.value)}
@@ -184,7 +184,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Video Quality</label>
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
               value={settings.videoQuality}
               onChange={(e) => updateSetting('videoQuality', e.target.value)}
             >
@@ -198,7 +198,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Frame Rate</label>
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
               value={settings.frameRate}
               onChange={(e) => updateSetting('frameRate', e.target.value)}
             >
@@ -211,7 +211,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Bitrate</label>
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
               value={settings.bitrate}
               onChange={(e) => updateSetting('bitrate', e.target.value)}
             >
@@ -230,7 +230,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Audio Quality</label>
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
               value={settings.audioQuality}
               onChange={(e) => updateSetting('audioQuality', e.target.value)}
             >
@@ -261,7 +261,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Screen Quality</label>
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
               value={settings.screenQuality}
               onChange={(e) => updateSetting('screenQuality', e.target.value)}
             >
@@ -349,7 +349,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">Language</label>
             <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500"
               value={settings.language}
               onChange={(e) => updateSetting('language', e.target.value)}
             >

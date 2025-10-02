@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBS Alternative - Browser Streaming Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status.info { background: #cce7ff; color: #004085; border: 1px solid #9fcfff; }
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        .btn-primary { background: #dc2626; color: white; }
+        .btn-primary:hover { background: #b91c1c; }
+        .btn-secondary { background: #6b7280; color: white; }
+        .btn-secondary:hover { background: #4b5563; }
+        .btn-success { background: #059669; color: white; }
+        .btn-success:hover { background: #047857; }
+        video {
+            width: 100%;
+            max-width: 800px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #dc2626;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 5px;
+        }
+        select, input {
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            margin: 5px;
+        }
+        .device-selector {
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .quality-controls {
+            background: #eff6ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #dc2626;
+            font-weight: bold;
+        }
+        .pulse-dot {
+            width: 12px;
+            height: 12px;
+            background: #dc2626;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔴 OBS Alternative - Browser Streaming</h1>
+            <p>Professional livestreaming directly from your browser - No external software needed!</p>
+        </div>
+
+        <div id="status" class="status info">
+            Ready to test browser-based streaming capabilities
+        </div>
+
+        <!-- Device Selection -->
+        <div class="device-selector">
+            <h3>📹 Source Selection</h3>
+            <div>
+                <label>Video Source:</label>
+                <select id="videoSelect">
+                    <option value="">Default Camera</option>
+                </select>
+            </div>
+            <div>
+                <label>Audio Source:</label>
+                <select id="audioSelect">
+                    <option value="">Default Microphone</option>
+                </select>
+            </div>
+            <div>
+                <label>
+                    <input type="checkbox" id="screenShare"> Use Screen Capture
+                </label>
+            </div>
+        </div>
+
+        <!-- Quality Controls -->
+        <div class="quality-controls">
+            <h3>⚙️ Stream Quality</h3>
+            <div>
+                <label>Resolution:</label>
+                <select id="resolution">
+                    <option value="854x480">480p (2.5k bitrate)</option>
+                    <option value="1280x720" selected>720p (4k bitrate)</option>
+                    <option value="1920x1080">1080p (6k bitrate)</option>
+                </select>
+            </div>
+            <div>
+                <label>Frame Rate:</label>
+                <select id="framerate">
+                    <option value="15">15 FPS</option>
+                    <option value="30" selected>30 FPS</option>
+                    <option value="60">60 FPS</option>
+                </select>
+            </div>
+            <div>
+                <label>Bitrate (kbps):</label>
+                <input type="number" id="bitrate" value="4000" min="1000" max="10000" step="500">
+            </div>
+        </div>
+
+        <!-- Video Preview -->
+        <video id="preview" muted autoplay playsinline></video>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button id="startPreview" class="btn-secondary">Start Preview</button>
+            <button id="startRecording" class="btn-primary" disabled>🔴 Start Recording</button>
+            <button id="stopRecording" class="btn-secondary" disabled>⏹️ Stop Recording</button>
+            <button id="testUpload" class="btn-success" disabled>📤 Test Server Upload</button>
+        </div>
+
+        <!-- Live Statistics -->
+        <div class="stats" id="statsContainer" style="display: none;">
+            <div class="stat-card">
+                <div class="stat-value" id="duration">00:00</div>
+                <div class="stat-label">Duration</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="fileSize">0 MB</div>
+                <div class="stat-label">Data Captured</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="uploadStatus">Ready</div>
+                <div class="stat-label">Upload Status</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="quality">720p@30fps</div>
+                <div class="stat-label">Current Quality</div>
+            </div>
+        </div>
+
+        <div id="liveIndicator" style="display: none;" class="live-indicator">
+            <div class="pulse-dot"></div>
+            RECORDING LIVE
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let stream = null;
+        let isRecording = false;
+        let startTime = null;
+        let durationInterval = null;
+
+        // DOM Elements
+        const videoSelect = document.getElementById('videoSelect');
+        const audioSelect = document.getElementById('audioSelect');
+        const screenShare = document.getElementById('screenShare');
+        const resolution = document.getElementById('resolution');
+        const framerate = document.getElementById('framerate');
+        const bitrate = document.getElementById('bitrate');
+        const preview = document.getElementById('preview');
+        const startPreview = document.getElementById('startPreview');
+        const startRecording = document.getElementById('startRecording');
+        const stopRecording = document.getElementById('stopRecording');
+        const testUpload = document.getElementById('testUpload');
+        const status = document.getElementById('status');
+        const statsContainer = document.getElementById('statsContainer');
+        const liveIndicator = document.getElementById('liveIndicator');
+
+        // Initialize
+        async function init() {
+            try {
+                await getDevices();
+                updateStatus('Devices loaded. Ready to start preview.', 'success');
+            } catch (error) {
+                updateStatus('Error initializing: ' + error.message, 'error');
+            }
+        }
+
+        // Get available devices
+        async function getDevices() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            
+            videoSelect.innerHTML = '<option value="">Default Camera</option>';
+            audioSelect.innerHTML = '<option value="">Default Microphone</option>';
+
+            devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `${device.kind} ${device.deviceId.slice(0, 8)}`;
+                
+                if (device.kind === 'videoinput') {
+                    videoSelect.appendChild(option);
+                } else if (device.kind === 'audioinput') {
+                    audioSelect.appendChild(option);
+                }
+            });
+        }
+
+        // Update status message
+        function updateStatus(message, type = 'info') {
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        // Get stream constraints
+        function getConstraints() {
+            const [width, height] = resolution.value.split('x').map(Number);
+            const fps = parseInt(framerate.value);
+
+            return {
+                video: {
+                    width: { ideal: width },
+                    height: { ideal: height },
+                    frameRate: { ideal: fps },
+                    deviceId: videoSelect.value || undefined
+                },
+                audio: {
+                    deviceId: audioSelect.value || undefined,
+                    sampleRate: 44100,
+                    channelCount: 2
+                }
+            };
+        }
+
+        // Start preview
+        async function startPreview() {
+            try {
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+
+                if (screenShare.checked) {
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: true,
+                        audio: true
+                    });
+                } else {
+                    stream = await navigator.mediaDevices.getUserMedia(getConstraints());
+                }
+
+                preview.srcObject = stream;
+                startRecording.disabled = false;
+                updateStatus('Preview started. Ready to record!', 'success');
+
+                // Update quality display
+                const track = stream.getVideoTracks()[0];
+                const settings = track.getSettings();
+                document.getElementById('quality').textContent = 
+                    `${settings.width}x${settings.height}@${settings.frameRate}fps`;
+
+            } catch (error) {
+                updateStatus('Error starting preview: ' + error.message, 'error');
+            }
+        }
+
+        // Start recording
+        async function startRecording() {
+            try {
+                recordedChunks = [];
+                
+                const options = {
+                    mimeType: 'video/webm;codecs=vp9,opus',
+                    videoBitsPerSecond: parseInt(bitrate.value) * 1000
+                };
+
+                // Fallback for unsupported codecs
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    options.mimeType = 'video/webm';
+                }
+
+                mediaRecorder = new MediaRecorder(stream, options);
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                        updateFileSize();
+                    }
+                };
+
+                mediaRecorder.onstart = () => {
+                    isRecording = true;
+                    startTime = Date.now();
+                    startRecording.disabled = true;
+                    stopRecording.disabled = false;
+                    statsContainer.style.display = 'grid';
+                    liveIndicator.style.display = 'flex';
+                    updateStatus('Recording started!', 'success');
+                    
+                    // Start duration counter
+                    durationInterval = setInterval(updateDuration, 1000);
+                };
+
+                mediaRecorder.onstop = () => {
+                    isRecording = false;
+                    clearInterval(durationInterval);
+                    startRecording.disabled = false;
+                    stopRecording.disabled = true;
+                    testUpload.disabled = false;
+                    liveIndicator.style.display = 'none';
+                    updateStatus('Recording stopped. Ready to test upload!', 'info');
+                };
+
+                // Start recording with 1-second chunks for real-time streaming
+                mediaRecorder.start(1000);
+
+            } catch (error) {
+                updateStatus('Error starting recording: ' + error.message, 'error');
+            }
+        }
+
+        // Stop recording
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+        }
+
+        // Update duration display
+        function updateDuration() {
+            if (startTime) {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                document.getElementById('duration').textContent = 
+                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }
+
+        // Update file size display
+        function updateFileSize() {
+            const totalSize = recordedChunks.reduce((acc, chunk) => acc + chunk.size, 0);
+            const sizeInMB = (totalSize / (1024 * 1024)).toFixed(2);
+            document.getElementById('fileSize').textContent = `${sizeInMB} MB`;
+        }
+
+        // Test upload to streaming server
+        async function testUpload() {
+            if (recordedChunks.length === 0) {
+                updateStatus('No recorded data to upload!', 'error');
+                return;
+            }
+
+            try {
+                document.getElementById('uploadStatus').textContent = 'Uploading...';
+                
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const formData = new FormData();
+                formData.append('chunk', blob);
+                formData.append('timestamp', Date.now());
+                
+                const response = await fetch('http://localhost:3001/api/stream-chunk', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    document.getElementById('uploadStatus').textContent = 'Success!';
+                    updateStatus('Successfully uploaded to streaming server!', 'success');
+                } else {
+                    document.getElementById('uploadStatus').textContent = 'Failed';
+                    updateStatus('Upload failed: ' + response.statusText, 'error');
+                }
+
+            } catch (error) {
+                document.getElementById('uploadStatus').textContent = 'Error';
+                updateStatus('Upload error: ' + error.message, 'error');
+            }
+        }
+
+        // Event listeners
+        startPreview.addEventListener('click', startPreview);
+        startRecording.addEventListener('click', startRecording);
+        stopRecording.addEventListener('click', stopRecording);
+        testUpload.addEventListener('click', testUpload);
+
+        // Initialize when page loads
+        init();
+    </script>
+</body>
+</html>

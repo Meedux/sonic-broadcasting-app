@@ -26,7 +26,7 @@ const Input = forwardRef(({
         <motion.input
           type={type}
           className={cn(
-            'flex h-12 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm transition-colors focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 disabled:cursor-not-allowed disabled:opacity-50',
+            'flex h-12 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-500 transition-colors focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 disabled:cursor-not-allowed disabled:opacity-50',
             Icon && 'pl-10',
             error && 'border-red-500 focus:border-red-500',
             className

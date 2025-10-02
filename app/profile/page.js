@@ -17,7 +17,6 @@ import {
   Zap,
   Play,
   Monitor,
-  Gift,
   Settings
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -31,7 +30,6 @@ const achievements = [
   { icon: Users, title: 'Popular Streamer', description: '1000+ followers', earned: true },
   { icon: Star, title: 'Rising Star', description: '10,000+ total views', earned: true },
   { icon: Monitor, title: 'Screen Share Master', description: '100+ screen shares', earned: false },
-  { icon: Gift, title: 'Gift Receiver', description: 'Received 500+ virtual gifts', earned: false },
   { icon: Zap, title: 'Speed Demon', description: '<30ms average latency', earned: true }
 ];
 
@@ -384,7 +382,7 @@ export default function ProfilePage() {
             <div className="space-y-2">
               <label className="text-sm font-medium text-gray-700">Bio</label>
               <textarea
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 resize-none"
                 rows={4}
                 value={profile.bio}
                 onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
