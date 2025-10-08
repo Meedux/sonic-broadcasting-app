@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MeetingProvider, useMeeting, useParticipant } from '@videosdk.live/react-sdk';
+import { MeetingProvider, useMeeting, useParticipant, usePubSub } from '@videosdk.live/react-sdk';
 import { VIDEOSDK_CONFIG, isValidTokenFormat, isTokenExpired } from '../config/videosdk';
 import { useElectronScreenShare } from '../hooks/useElectronScreenShare';
 
@@ -66,6 +66,9 @@ function StreamingStudio({ meetingId, onStreamingEnd }: StreamingStudioProps) {
       }
     },
   }) || {};
+
+  // Subscribe to CONTROL pubsub channel to receive commands from mobile controller
+  // ...control pubsub listener moved below broadcast handlers to avoid hook ordering issues
 
   // Electron screen sharing hook
   const { startScreenShare: startElectronScreenShare, stopScreenShare: stopElectronScreenShare, isScreenSharing: isElectronScreenSharing } = useElectronScreenShare();
@@ -230,6 +233,55 @@ function StreamingStudio({ meetingId, onStreamingEnd }: StreamingStudioProps) {
     }
   }, [stopHls]);
 
+  // CONTROL pubsub polling: read messages array periodically and handle commands
+  const controlPubsub = usePubSub('CONTROL', {});
+
+  useEffect(() => {
+    let lastIndex = 0;
+    const id = setInterval(async () => {
+      try {
+        const msgs = controlPubsub?.messages || [];
+        while (lastIndex < msgs.length) {
+          const m = msgs[lastIndex];
+          lastIndex++;
+          try {
+            const raw = m?.message || m?.payload || m;
+            const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            const action = (payload?.action || payload?.type || '').toString().toUpperCase();
+            const data = payload?.payload || {};
+            console.log('📨 CONTROL (poll) received:', action, data);
+            switch (action) {
+              case 'START':
+                if (data?.rmtp || data?.rtmp || data?.rmtpUrl) {
+                  const url = data.rmtp || data.rtmp || data.rmtpUrl;
+                  setStreamConfig((prev) => ({ ...prev, url: url, key: data.key || prev.key }));
+                }
+                handleStartBroadcast();
+                break;
+              case 'STOP':
+                handleStopBroadcast();
+                break;
+              case 'PAUSE':
+                handleStopBroadcast();
+                break;
+              case 'START_CAPTURE':
+              case 'STOP_CAPTURE':
+                await handleToggleDesktopCapture();
+                break;
+              default:
+                console.log('Unknown CONTROL action (poll):', action);
+            }
+          } catch (e) {
+            console.error('CONTROL message handling error:', e);
+          }
+        }
+      } catch (e) {
+        console.error('CONTROL poll error', e);
+      }
+    }, 600);
+    return () => clearInterval(id);
+  }, [controlPubsub, handleStartBroadcast, handleStopBroadcast, handleToggleDesktopCapture]);
+
   // Get platform-specific RTMP URLs
   const getStreamUrl = (platform: string) => {
     switch (platform) {
@@ -249,261 +301,62 @@ function StreamingStudio({ meetingId, onStreamingEnd }: StreamingStudioProps) {
   }, [streamConfig.platform]);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Header */}
-      <header className="bg-black border-b border-gray-800 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center font-bold text-white text-sm">
-                SL
-              </div>
-              <h1 className="text-xl font-bold text-white">Sonic Live Studio</h1>
-            </div>
-            <div className="flex items-center space-x-2 bg-gray-800 px-3 py-1.5 rounded-lg">
-              <div className={`w-2 h-2 rounded-full ${isLive ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`} />
-              <span className={`text-sm font-semibold ${isLive ? 'text-red-400' : 'text-gray-400'}`}>
-                {isLive ? 'LIVE' : 'OFFLINE'}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center space-x-3">
-            <div className={`px-3 py-1.5 rounded-lg text-sm font-medium ${studioReady ? 'bg-green-900 text-green-300' : 'bg-gray-800 text-gray-400'}`}>
-              {studioReady ? '✅ Studio Ready' : '⏳ Loading Studio...'}
-            </div>
-            <div className={`px-3 py-1.5 rounded-lg text-sm font-medium ${mobileConnected ? 'bg-blue-900 text-blue-300' : 'bg-gray-800 text-gray-400'}`}>
-              {mobileConnected ? '📱 Mobile Connected' : '📱 Mobile Disconnected'}
-            </div>
-          </div>
+    <div className="app-window">
+      <div className="topbar">
+        <div className="brand">
+          <div style={{width:36, height:36, borderRadius:8, background:'#E11D48', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700}}>SL</div>
+          <div style={{fontSize:16, fontWeight:700}}>Sonic Live Studio</div>
         </div>
-      </header>
-
-      <div className="p-6">
-        <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-          {/* Main Video Area */}
-          <div className="xl:col-span-3 space-y-6">
-            {/* Screen Share Area */}
-            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="flex justify-between items-center p-4 bg-gray-700 border-b border-gray-600">
-                <div className="flex items-center space-x-3">
-                  <div className="w-3 h-3 bg-red-600 rounded-full"></div>
-                  <h3 className="text-lg font-semibold text-white">Desktop Capture</h3>
-                  <span className="text-xs text-gray-400 bg-gray-600 px-2 py-1 rounded">Primary Source</span>
-                </div>
-                <button
-                  onClick={handleToggleDesktopCapture}
-                  className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-200 ${
-                    captureActive 
-                      ? 'bg-red-600 hover:bg-red-700 text-white shadow-lg' 
-                      : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
-                  }`}
-                >
-                  {captureActive ? '🛑 Stop Capture' : '📺 Start Capture'}
-                </button>
-              </div>
-              <div className="bg-black rounded-b-xl aspect-video flex items-center justify-center relative">
-                {captureActive ? (
-                  <DesktopCaptureView participantId={presenterId || 'local'} />
-                ) : (
-                  <div className="text-gray-400 text-center p-8">
-                    <div className="text-6xl mb-4 opacity-50">🖥️</div>
-                    <h4 className="text-xl font-semibold mb-2 text-white">Desktop Capture Inactive</h4>
-                    <p className="text-gray-400 mb-4">Click &quot;Start Capture&quot; to begin recording your desktop</p>
-                    <div className="text-sm text-gray-500">
-                      {!mobileConnected 
-                        ? "📱 Connect your mobile controller first" 
-                        : "Your desktop will be the primary video source"}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Mobile Camera Feed Area */}
-            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="flex justify-between items-center p-4 bg-gray-700 border-b border-gray-600">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-3 h-3 rounded-full ${mobileConnected ? 'bg-green-500' : 'bg-gray-500'}`}></div>
-                  <h3 className="text-lg font-semibold text-white">Mobile Controller</h3>
-                  <span className="text-xs text-gray-400 bg-gray-600 px-2 py-1 rounded">Camera Feed</span>
-                </div>
-              </div>
-              <div className="bg-black rounded-b-xl aspect-video w-full max-w-md flex items-center justify-center">
-                {mobileConnected ? (
-                  <MobileCameraView participants={participants} />
-                ) : (
-                  <div className="text-gray-400 text-center p-8">
-                    <div className="text-5xl mb-4 opacity-50">📱</div>
-                    <h4 className="text-lg font-semibold mb-2 text-white">Mobile Camera Disconnected</h4>
-                    <p className="text-gray-400 text-sm">Waiting for mobile device to connect</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Control Panel */}
-          <div className="xl:col-span-2 space-y-6">
-            {/* Connection Status Panel */}
-            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="bg-gradient-to-r from-red-600 to-red-700 p-4">
-                <h3 className="font-bold text-white text-lg">System Status</h3>
-              </div>
-              <div className="p-4 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-gray-700 rounded-lg p-3">
-                    <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Pairing ID</div>
-                    <div className="font-mono text-sm text-white bg-gray-800 px-2 py-1 rounded">
-                      {meetingId.slice(-8)}
-                    </div>
-                  </div>
-                  <div className="bg-gray-700 rounded-lg p-3">
-                    <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Connected</div>
-                    <div className="text-lg font-bold text-white">{participants.size + 1}</div>
-                  </div>
-                </div>
-                
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-300">Desktop Capture</span>
-                    <span className={`text-sm font-semibold px-2 py-1 rounded ${
-                      captureActive ? 'bg-green-600 text-white' : 'bg-gray-600 text-gray-300'
-                    }`}>
-                      {captureActive ? 'Active' : 'Inactive'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-300">Mobile Controller</span>
-                    <span className={`text-sm font-semibold px-2 py-1 rounded ${
-                      mobileConnected ? 'bg-green-600 text-white' : 'bg-gray-600 text-gray-300'
-                    }`}>
-                      {mobileConnected ? 'Connected' : 'Disconnected'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-300">Broadcast Status</span>
-                    <span className={`text-sm font-semibold px-2 py-1 rounded ${
-                      isLive ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-600 text-gray-300'
-                    }`}>
-                      {isLive ? 'BROADCASTING' : 'OFFLINE'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Stream Configuration Panel */}
-            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="bg-gradient-to-r from-red-600 to-red-700 p-4">
-                <h3 className="font-bold text-white text-lg">Stream Configuration</h3>
-              </div>
-              <div className="p-4 space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-300 mb-2">Platform</label>
-                  <select
-                    value={streamConfig.platform}
-                    onChange={(e) => setStreamConfig(prev => ({ ...prev, platform: e.target.value }))}
-                    className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                  >
-                    <option value="youtube">YouTube Live</option>
-                    <option value="facebook">Facebook Live</option>
-                    <option value="twitch">Twitch</option>
-                    <option value="custom">Custom RTMP</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-semibold text-gray-300 mb-2">Stream URL</label>
-                  <input
-                    type="text"
-                    value={streamConfig.url}
-                    onChange={(e) => setStreamConfig(prev => ({ ...prev, url: e.target.value }))}
-                    placeholder="rtmp://live.platform.com/live"
-                    className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500 placeholder-gray-400"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-semibold text-gray-300 mb-2">Stream Key</label>
-                  <input
-                    type="password"
-                    value={streamConfig.key}
-                    onChange={(e) => setStreamConfig(prev => ({ ...prev, key: e.target.value }))}
-                    placeholder="Enter your stream key"
-                    className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500 placeholder-gray-400"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Stream Controls Panel */}
-            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="bg-gradient-to-r from-red-600 to-red-700 p-4">
-                <h3 className="font-bold text-white text-lg">Broadcasting Controls</h3>
-              </div>
-              <div className="p-4 space-y-4">
-                <button
-                  onClick={isLive ? handleStopBroadcast : handleStartBroadcast}
-                  disabled={!captureActive || !mobileConnected}
-                  className={`w-full py-4 px-6 rounded-xl font-bold text-lg transition-all duration-300 shadow-lg ${
-                    isLive
-                      ? 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white transform hover:scale-105'
-                      : !captureActive || !mobileConnected
-                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white transform hover:scale-105'
-                  }`}
-                >
-                  {isLive ? '🔴 STOP BROADCAST' : '▶️ START BROADCAST'}
-                </button>
-                
-                {(!captureActive || !mobileConnected) && (
-                  <div className="bg-gray-700 rounded-lg p-3">
-                    <div className="text-xs text-yellow-400 font-semibold mb-1">REQUIREMENTS</div>
-                    <div className="text-xs text-gray-300">
-                      {!captureActive && !mobileConnected ? 
-                        '• Enable desktop capture and connect mobile controller' :
-                        !captureActive ? '• Enable desktop capture to continue' :
-                        '• Connect mobile controller to continue'
-                      }
-                    </div>
-                  </div>
-                )}
-
-                {/* Live Indicator */}
-                {isLive && (
-                  <div className="bg-red-600 rounded-lg p-4 text-center">
-                    <div className="flex items-center justify-center space-x-3">
-                      <div className="w-4 h-4 bg-white rounded-full animate-pulse" />
-                      <span className="text-lg font-bold text-white tracking-wide">LIVE ON AIR</span>
-                      <div className="w-4 h-4 bg-white rounded-full animate-pulse" />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Quick Actions Panel */}
-            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-              <div className="bg-gradient-to-r from-gray-600 to-gray-700 p-4">
-                <h3 className="font-bold text-white text-lg">Quick Actions</h3>
-              </div>
-              <div className="p-4 space-y-3">
-                <button
-                  onClick={() => navigator.clipboard.writeText(meetingId)}
-                  className="w-full py-3 px-4 text-sm bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white transition-colors"
-                >
-                  📋 Copy Meeting ID
-                </button>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="w-full py-3 px-4 text-sm bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white transition-colors"
-                >
-                  🔄 Restart Session
-                </button>
-              </div>
-            </div>
-          </div>
+        <div style={{display:'flex', gap:12, alignItems:'center'}}>
+          <div className="status-pill">{studioReady ? 'Studio Ready' : 'Loading Studio...'}</div>
+          <div className="status-pill">{mobileConnected ? 'Mobile Connected' : 'Mobile Disconnected'}</div>
         </div>
+      </div>
+
+      <div className="sidebar-main">
+        <aside className="left-sidebar">
+          <h4 style={{marginBottom:12}}>Navigation</h4>
+          <div style={{display:'flex', flexDirection:'column', gap:8}}>
+            <button className="control-button">Dashboard</button>
+            <button className="control-button">Streams</button>
+            <button className="control-button">Settings</button>
+          </div>
+        </aside>
+
+        <main className="main-content">
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+            <div style={{fontSize:18, fontWeight:700}}>Stream Preview</div>
+            <div style={{display:'flex', gap:8, alignItems:'center'}}>
+              <div style={{width:10, height:10, borderRadius:6, background:isLive ? '#E11D48' : '#444'}} />
+              <div style={{color:'#bbb'}}>{isLive ? 'LIVE' : 'OFFLINE'}</div>
+            </div>
+          </div>
+
+          <div className="preview-area">
+            <div className="preview-box">
+              {mobileConnected ? <MobileCameraView participants={participants} /> : <div>Mobile Camera disconnected</div>}
+            </div>
+            <div className="preview-box">
+              {captureActive ? <DesktopCaptureView participantId={presenterId || 'local'} /> : <div>Desktop Capture inactive</div>}
+            </div>
+          </div>
+        </main>
+
+        <aside className="right-panel">
+          <h4>System Status</h4>
+          <div style={{marginTop:12}}>
+            <div style={{marginBottom:8}}>Meeting ID</div>
+            <div style={{fontFamily:'monospace', background:'#070707', padding:8, borderRadius:6}}>{meetingId}</div>
+          </div>
+
+          <div style={{marginTop:18}}>
+            <button className="control-button" onClick={isLive ? handleStopBroadcast : handleStartBroadcast}>{isLive ? 'Stop Broadcast' : 'Start Broadcast'}</button>
+          </div>
+
+          <div style={{marginTop:12}}>
+            <button style={{width:'100%', padding:8, borderRadius:8, background:'#222', color:'#fff'}} onClick={() => navigator.clipboard.writeText(meetingId)}>Copy Meeting ID</button>
+          </div>
+        </aside>
       </div>
     </div>
   );

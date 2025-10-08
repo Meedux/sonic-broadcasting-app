@@ -59,6 +59,13 @@ export const createVideoSDKMeeting = async (token: string): Promise<{ roomId: st
     },
     body: JSON.stringify({
       region: VIDEOSDK_CONFIG.region,
+      // Request a one-to-one / p2p meeting when creating from the Desktop studio.
+      // NOTE: VideoSDK API accepts additional properties; using `properties.roomType` and `template: 'p2p'` as hints.
+      // If your VideoSDK account uses a different parameter name for one-to-one rooms, adjust accordingly.
+      template: 'p2p',
+      properties: {
+        roomType: 'ONE_TO_ONE',
+      },
     }),
   });
 
