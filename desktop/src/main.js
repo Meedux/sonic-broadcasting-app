@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
-const WebSocket = require('ws');
+// const WebSocket = require('ws');
 const io = require('socket.io')(8080, {
   cors: {
     origin: "*",
