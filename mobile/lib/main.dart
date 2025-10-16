@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'dart:async';
+import 'dart:math';
+import 'dart:typed_data';
+import 'dart:convert';
 
 void main() {
   runApp(const MyApp());
@@ -43,29 +46,36 @@ class _MobileHomePageState extends State<MobileHomePage> {
   bool isConnected = false;
   bool isStreaming = false;
   bool isConnecting = false; // Loading state for connection
-  bool isWebRTCConnected = false;
 
-  // WebRTC variables
+  // Text controllers for input fields
+  final TextEditingController ipController = TextEditingController();
+  final TextEditingController pairingCodeController = TextEditingController();
+
+  // Screen sharing variables
   RTCPeerConnection? peerConnection;
-  RTCVideoRenderer? remoteRenderer;
-  String? consumerTransportId;
-  String? producerId;
-  String? consumerId;
+  RTCVideoRenderer screenRenderer = RTCVideoRenderer();
+  bool isScreenSharingActive = false;
+  MemoryImage? screenImage;
 
   io.Socket? socket;
   String rtspUrl = ''; // Not used anymore
 
-  // Text controllers for proper input handling
-  final TextEditingController ipController = TextEditingController();
-  final TextEditingController pairingCodeController = TextEditingController();
+  // Chat mock data
+  List<Map<String, String>> chatMessages = [];
+  Timer? chatTimer;
 
   @override
   void initState() {
     super.initState();
     initCamera();
-    initWebRTC();
     // Initialize text controllers
     ipController.text = desktopIP;
+
+    // Initialize mock chat messages
+    _initMockChat();
+
+    // Initialize WebRTC renderer
+    initWebRTC();
 
     // Start heartbeat timer to keep connection alive
     Timer.periodic(const Duration(seconds: 30), (timer) {
@@ -75,10 +85,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
     });
   }
 
-  Future<void> initWebRTC() async {
-    remoteRenderer = RTCVideoRenderer();
-    await remoteRenderer!.initialize();
-  }
+
 
   Future<void> initCamera() async {
     cameras = await availableCameras();
@@ -158,24 +165,48 @@ class _MobileHomePageState extends State<MobileHomePage> {
         );
       });
 
-      socket!.on('webrtc-answer', (data) async {
-        print('Received WebRTC answer from desktop');
+      // Listen for screen sharing offer from desktop
+      socket!.on('screen-offer', (data) async {
+        print('Received screen offer from desktop');
         try {
-          await peerConnection!.setRemoteDescription(
-            RTCSessionDescription(data['sdp'], data['type'])
-          );
-          print('WebRTC answer set successfully');
+          await setupWebRTC();
+          if (peerConnection != null) {
+            await peerConnection!.setRemoteDescription(
+              RTCSessionDescription(data['offer']['sdp'], data['offer']['type'])
+            );
+
+            RTCSessionDescription answer = await peerConnection!.createAnswer();
+            await peerConnection!.setLocalDescription(answer);
+
+            socket!.emit('screen-answer', {
+              'answer': {
+                'sdp': answer.sdp,
+                'type': answer.type
+              }
+            });
+
+            setState(() {
+              isStreaming = true;
+            });
+          }
         } catch (error) {
-          print('Error setting WebRTC answer: $error');
+          print('Error handling screen offer: $error');
         }
       });
 
-      socket!.on('ice-candidate', (data) async {
+      // Listen for ICE candidates from desktop
+      socket!.on('screen-ice-candidate', (data) async {
         print('Received ICE candidate from desktop');
         try {
-          await peerConnection!.addCandidate(
-            RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex'])
-          );
+          if (peerConnection != null && data['candidate'] != null) {
+            await peerConnection!.addCandidate(
+              RTCIceCandidate(
+                data['candidate']['candidate'],
+                data['candidate']['sdpMid'],
+                data['candidate']['sdpMLineIndex']
+              )
+            );
+          }
         } catch (error) {
           print('Error adding ICE candidate: $error');
         }
@@ -183,7 +214,6 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
       socket!.on('screen-sharing-started', (_) {
         setState(() {
-          isWebRTCConnected = true;
           isStreaming = true;
           isConnecting = false;
         });
@@ -194,7 +224,6 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
       socket!.on('screen-sharing-stopped', (_) {
         setState(() {
-          isWebRTCConnected = false;
           isStreaming = false;
         });
       });
@@ -219,13 +248,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
         );
       });
 
-      socket!.on('stream-started', (data) async {
-        print('Stream started - WebRTC streaming active');
-        setState(() {
-          isStreaming = true;
-          isConnecting = false;
-        });
-      });
+
 
 
 
@@ -258,64 +281,8 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
   void startScreenSharing() async {
     if (socket != null && isConnected) {
-      print('Creating WebRTC offer for screen sharing');
-      setState(() {
-        isConnecting = true;
-      });
-
-      try {
-        // Create WebRTC peer connection
-        peerConnection = await createPeerConnection({
-          'iceServers': [
-            {'urls': 'stun:stun.l.google.com:19302'}
-          ]
-        });
-
-        peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
-          print('Sending ICE candidate from mobile');
-          socket!.emit('ice-candidate', {
-            'candidate': candidate.candidate,
-            'sdpMid': candidate.sdpMid,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
-          });
-        };
-
-        peerConnection!.onAddStream = (MediaStream stream) {
-          print('Received remote stream on mobile');
-          remoteRenderer!.srcObject = stream;
-          setState(() {
-            isWebRTCConnected = true;
-            isStreaming = true;
-            isConnecting = false;
-          });
-        };
-
-        peerConnection!.onConnectionState = (RTCPeerConnectionState state) {
-          print('Mobile peer connection state: $state');
-          if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-            print('WebRTC connection established on mobile');
-          }
-        };
-
-        // Create offer
-        RTCSessionDescription offer = await peerConnection!.createOffer();
-        await peerConnection!.setLocalDescription(offer);
-
-        print('Sending WebRTC offer to desktop');
-        socket!.emit('webrtc-offer', {
-          'sdp': offer.sdp,
-          'type': offer.type,
-        });
-
-      } catch (error) {
-        print('Error creating WebRTC offer: $error');
-        setState(() {
-          isConnecting = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start screen sharing: $error')),
-        );
-      }
+      print('Requesting screen sharing start');
+      socket!.emit('start-screen-sharing');
     }
   }
 
@@ -323,65 +290,89 @@ class _MobileHomePageState extends State<MobileHomePage> {
     if (socket != null && isConnected) {
       print('Stopping screen sharing');
       socket!.emit('stop-screen-sharing');
+      cleanupWebRTC();
       setState(() {
         isStreaming = false;
-        isWebRTCConnected = false;
+        isScreenSharingActive = false;
       });
     }
   }
 
-  Future<void> handleOffer(Map<String, dynamic> data) async {
-    try {
-      peerConnection = await createPeerConnection({
-        'iceServers': [
-          {'urls': 'stun:stun.l.google.com:19302'}
-        ]
-      });
+  Future<void> initWebRTC() async {
+    await screenRenderer.initialize();
+  }
 
-      peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
-        socket!.emit('ice-candidate', {
-          'candidate': candidate.candidate,
-          'sdpMid': candidate.sdpMid,
-          'sdpMLineIndex': candidate.sdpMLineIndex,
-        });
-      };
+  Future<void> setupWebRTC() async {
+    peerConnection = await createPeerConnection({
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+        {'urls': 'stun:stun1.l.google.com:19302'}
+      ]
+    });
 
-      // Use onAddStream for better compatibility with flutter_webrtc
-      peerConnection!.onAddStream = (MediaStream stream) {
-        print('Received remote stream');
-        remoteRenderer!.srcObject = stream;
+    // Add connection state monitoring
+    peerConnection!.onConnectionState = (state) {
+      print('WebRTC connection state: $state');
+    };
+
+    peerConnection!.onIceConnectionState = (state) {
+      print('ICE connection state: $state');
+    };
+
+    peerConnection!.onTrack = (event) {
+      print('Received remote track');
+      if (event.track.kind == 'video') {
+        screenRenderer.srcObject = event.streams[0];
         setState(() {
-          isWebRTCConnected = true;
-          isStreaming = true;
-          isConnecting = false;
+          isScreenSharingActive = true;
         });
-      };
+      }
+    };
 
-      peerConnection!.onTrack = (RTCTrackEvent event) {
-        print('Received remote track: ${event.track.kind}');
-        // Fallback for onTrack if onAddStream doesn't work
-        if (event.track.kind == 'video' && remoteRenderer!.srcObject == null) {
-          remoteRenderer!.srcObject = event.streams[0];
-        }
-      };
+    peerConnection!.onIceCandidate = (candidate) {
+      if (candidate != null && socket != null && isConnected) {
+        socket!.emit('mobile-ice-candidate', {
+          'candidate': candidate.toMap()
+        });
+      }
+    };
+  }
 
-      peerConnection!.onConnectionState = (RTCPeerConnectionState state) {
-        print('Connection state: $state');
-      };
+  void cleanupWebRTC() {
+    if (peerConnection != null) {
+      peerConnection!.close();
+      peerConnection = null;
+    }
+    screenRenderer.srcObject = null;
+    screenRenderer.dispose();
+  }
 
-      await peerConnection!.setRemoteDescription(
-        RTCSessionDescription(data['sdp'], data['type'])
-      );
 
-      RTCSessionDescription answer = await peerConnection!.createAnswer();
-      await peerConnection!.setLocalDescription(answer);
 
-      socket!.emit('webrtc-answer', {
-        'sdp': answer.sdp,
-        'type': answer.type,
+  void handleFrameData(Uint8List data) {
+    try {
+      // The data is the JPEG image bytes directly
+      setState(() {
+        screenImage = MemoryImage(data);
       });
     } catch (error) {
-      print('Error handling offer: $error');
+      print('Error handling frame data: $error');
+    }
+  }
+
+  void handleScreenFrame(dynamic data) {
+    try {
+      // Data contains base64 encoded JPEG frame
+      final base64Data = data['frame'] as String;
+      // Remove the data URL prefix if present (data:image/jpeg;base64,)
+      final cleanBase64 = base64Data.replaceFirst(RegExp(r'data:image/[^;]+;base64,'), '');
+      final imageBytes = base64.decode(cleanBase64);
+
+      setState(() {
+        screenImage = MemoryImage(Uint8List.fromList(imageBytes));
+      });
+    } catch (error) {
+      print('Error handling screen frame: $error');
     }
   }
 
@@ -417,15 +408,14 @@ class _MobileHomePageState extends State<MobileHomePage> {
     }
     socket?.dispose();
 
-    // Clean up WebRTC
-    peerConnection?.dispose();
-    peerConnection = null;
-    remoteRenderer?.srcObject = null;
+    // Clean up WebRTC connection
+    peerConnection?.close();
+    screenRenderer?.dispose();
 
     setState(() {
       isConnected = false;
       isStreaming = false;
-      isWebRTCConnected = false;
+      screenImage = null; // Clear the screen image
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Disconnected from desktop')),
@@ -434,187 +424,643 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
   @override
   void dispose() {
-    // Clean up WebRTC
-    peerConnection?.dispose();
-    remoteRenderer?.dispose();
-
     controller?.dispose();
     socket?.dispose();
+    chatTimer?.cancel();
     ipController.dispose();
     pairingCodeController.dispose();
     super.dispose();
   }
 
-  Widget _buildPlayerWidget() {
-    print('Building player widget - isConnected: $isConnected, isStreaming: $isStreaming, isWebRTCConnected: $isWebRTCConnected');
+  void showConnectionDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1a1a1a),
+        title: const Text(
+          'Connect to Desktop',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              decoration: const InputDecoration(
+                labelText: 'Desktop IP Address',
+                labelStyle: TextStyle(color: Color(0xFFff4757)),
+                border: OutlineInputBorder(),
+                hintText: '10.0.2.2 or actual IP',
+                hintStyle: TextStyle(color: Color(0xFF666666)),
+              ),
+              style: const TextStyle(color: Colors.white),
+              controller: ipController,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              decoration: const InputDecoration(
+                labelText: 'Pairing Code',
+                labelStyle: TextStyle(color: Color(0xFFff4757)),
+                border: OutlineInputBorder(),
+                hintStyle: TextStyle(color: Color(0xFF666666)),
+              ),
+              style: const TextStyle(color: Colors.white),
+              controller: pairingCodeController,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF888888))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              connectToDesktop();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFdc143c),
+            ),
+            child: const Text('Connect'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionPrompt() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.2),
+              ),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.cast,
+                  size: 64,
+                  color: Colors.white.withOpacity(0.7),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Sonic Broadcasting Controller',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Connect to your desktop to start screen sharing and control your broadcast',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.7),
+                    fontSize: 16,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () => showConnectionDialog(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFdc143c),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(25),
+                    ),
+                  ),
+                  child: const Text(
+                    'Connect to Desktop',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControllerInterface() {
     return Column(
       children: [
-        // WebRTC Stream (screenshare from desktop) - shown when streaming
-        if (isConnected && isStreaming && remoteRenderer != null)
-          Expanded(
-            flex: 2,
-            child: Container(
+        // Screen sharing preview (top section - largest)
+        Expanded(
+          flex: 4,
+          child: Container(
+            margin: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
               color: Colors.black,
-              child: RTCVideoView(
-                remoteRenderer!,
-                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                placeholderBuilder: (context) => const Center(child: CircularProgressIndicator()),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isStreaming ? const Color(0xFFdc143c).withOpacity(0.6) : const Color(0xFF333333),
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: isStreaming ? const Color(0xFFdc143c).withOpacity(0.2) : Colors.black.withOpacity(0.3),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Stack(
+                children: [
+                  // Screen preview from WebRTC stream
+                  if (isScreenSharingActive && screenRenderer.srcObject != null)
+                    RTCVideoView(screenRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain)
+                  else
+                    Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.desktop_windows,
+                            size: 48,
+                            color: Colors.white.withOpacity(0.5),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            isStreaming ? 'Connecting...' : 'Screen sharing not active',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  // Live indicator overlay
+                  if (isStreaming)
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFdc143c).withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              'LIVE',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  // Control buttons overlay
+                  Positioned(
+                    bottom: 12,
+                    left: 12,
+                    right: 12,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: isStreaming ? stopScreenSharing : startScreenSharing,
+                          icon: Icon(isStreaming ? Icons.stop : Icons.play_arrow, size: 16),
+                          label: Text(isStreaming ? 'Stop' : 'Start', style: const TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isStreaming ? const Color(0xFFdc143c) : Colors.green,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            IconButton(
+                              onPressed: () {},
+                              icon: const Icon(Icons.fullscreen, size: 16),
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.black.withOpacity(0.5),
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            IconButton(
+                              onPressed: () {},
+                              icon: const Icon(Icons.settings, size: 16),
+                              style: IconButton.styleFrom(
+                                backgroundColor: Colors.black.withOpacity(0.5),
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-        // Camera preview - always shown at bottom
-        if (isInitialized)
-          Expanded(
-            flex: 1,
-            child: Container(
-              margin: const EdgeInsets.only(top: 8.0),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8.0),
-                child: CameraPreview(controller!),
+        ),
+
+        // Camera preview with controls (middle section)
+        Expanded(
+          flex: 2,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: const Color(0xFF333333),
               ),
             ),
-          )
-        else
-          const Expanded(
-            flex: 1,
-            child: Center(child: Text('Camera initializing...')),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Stack(
+                children: [
+                  if (isInitialized)
+                    CameraPreview(controller!)
+                  else
+                    const Center(
+                      child: CircularProgressIndicator(
+                        color: Color(0xFFff6b6b),
+                      ),
+                    ),
+                  // Camera controls overlay
+                  Positioned(
+                    bottom: 8,
+                    left: 8,
+                    right: 8,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.camera_alt, size: 20),
+                          style: IconButton.styleFrom(
+                            backgroundColor: Colors.black.withOpacity(0.5),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.mic, size: 20),
+                          style: IconButton.styleFrom(
+                            backgroundColor: Colors.black.withOpacity(0.5),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {},
+                          icon: const Icon(Icons.switch_camera, size: 20),
+                          style: IconButton.styleFrom(
+                            backgroundColor: Colors.black.withOpacity(0.5),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
+        ),
+
+        // Live Chat (bottom section)
+        Expanded(
+          flex: 2,
+          child: Container(
+            margin: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1a1a1a),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: const Color(0xFF333333),
+              ),
+            ),
+            child: Column(
+              children: [
+                // Chat header
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2a2a2a),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.chat,
+                        color: const Color(0xFFff4757),
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        'Live Chat',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFdc143c).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          '1.2K viewers',
+                          style: TextStyle(
+                            color: Color(0xFFff4757),
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Chat messages
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.all(12),
+                    children: _buildMockChatMessages(),
+                  ),
+                ),
+
+                // Chat input
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(
+                        color: const Color(0xFF333333),
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: 'Type a message...',
+                            hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(15),
+                              borderSide: BorderSide.none,
+                            ),
+                            filled: true,
+                            fillColor: const Color(0xFF2a2a2a),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      IconButton(
+                        onPressed: () {},
+                        icon: const Icon(Icons.send, size: 16),
+                        style: IconButton.styleFrom(
+                          backgroundColor: const Color(0xFFdc143c),
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
+  }
+
+  void _initMockChat() {
+    // Initial mock messages
+    chatMessages = [
+      {'user': 'Alex_123', 'message': 'Amazing stream! 🔥', 'time': '2m ago'},
+      {'user': 'GamingPro', 'message': 'Love the new setup!', 'time': '1m ago'},
+      {'user': 'StreamFan', 'message': 'Can you show the character select?', 'time': '45s ago'},
+      {'user': 'CoolViewer', 'message': 'GG on that last match', 'time': '30s ago'},
+      {'user': 'ChatMaster', 'message': 'Stream quality is perfect!', 'time': '15s ago'},
+    ];
+
+    // Simulate new messages every 10-30 seconds
+    chatTimer = Timer.periodic(Duration(seconds: Random().nextInt(20) + 10), (timer) {
+      if (isConnected && mounted) {
+        _addMockChatMessage();
+      }
+    });
+  }
+
+  void _addMockChatMessage() {
+    final users = ['Alex_123', 'GamingPro', 'StreamFan', 'CoolViewer', 'ChatMaster', 'ViewerX', 'StreamLover', 'GameMaster', 'ProPlayer'];
+    final messages = [
+      'Great stream!',
+      'Love this game!',
+      'What\'s your setup?',
+      'Amazing gameplay!',
+      'Keep it up! 💪',
+      'GG!',
+      'Nice moves!',
+      'Can you explain that strategy?',
+      'Stream quality is perfect!',
+      'How long have you been playing?',
+      'This is so entertaining!',
+      'Best stream ever! 🔥',
+      'Teach me that combo!',
+      'You\'re so good at this!',
+      'What level are you on?',
+    ];
+
+    final user = users[Random().nextInt(users.length)];
+    final message = messages[Random().nextInt(messages.length)];
+
+    setState(() {
+      chatMessages.insert(0, {
+        'user': user,
+        'message': message,
+        'time': 'now'
+      });
+
+      // Keep only last 20 messages
+      if (chatMessages.length > 20) {
+        chatMessages = chatMessages.sublist(0, 20);
+      }
+    });
+  }
+
+  List<Widget> _buildMockChatMessages() {
+    return chatMessages.map((msg) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${msg['user']}: ',
+              style: const TextStyle(
+                color: Color(0xFFff4757),
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+            Expanded(
+              child: Text(
+                msg['message']!,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            Text(
+              ' ${msg['time']}',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.5),
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+      );
+    }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sonic Broadcasting - Mobile'),
-        backgroundColor: Colors.red,
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-        children: [
-          TextField(
-            decoration: const InputDecoration(
-              labelText: 'Desktop IP Address',
-              border: OutlineInputBorder(),
-              hintText: '10.0.2.2 (Android emulator) or actual IP',
-            ),
-            controller: ipController,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFF0a0a0a),
+              Color(0xFF000000),
+              Color(0xFF1a1a1a),
+            ],
           ),
-          const SizedBox(height: 16),
-          TextField(
-            decoration: const InputDecoration(
-              labelText: 'Pairing Code',
-              border: OutlineInputBorder(),
-            ),
-            controller: pairingCodeController,
-            keyboardType: TextInputType.number,
-            maxLength: 6,
-          ),
-          const SizedBox(height: 16),
-          Row(
+        ),
+        child: SafeArea(
+          child: Column(
             children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: isConnecting ? null : connectToDesktop,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: isConnecting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              // Header with connection status
+              Container(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: isConnected ? const Color(0xFFdc143c).withOpacity(0.2) : const Color(0xFF333333),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isConnected ? const Color(0xFFdc143c).withOpacity(0.5) : const Color(0xFF444444),
+                        ),
+                      ),
+                      child: Icon(
+                        isConnected ? Icons.wifi : Icons.wifi_off,
+                        color: isConnected ? const Color(0xFFff4757) : const Color(0xFF888888),
+                        size: 16,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isConnected ? 'Connected to Desktop' : 'Disconnected',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                        )
-                      : const Text('Connect'),
+                          Text(
+                            isConnected
+                                ? (isStreaming ? 'Screen sharing active' : 'Ready to share screen')
+                                : 'Tap connect to start',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.7),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!isConnected)
+                      ElevatedButton(
+                        onPressed: isConnecting ? null : () => showConnectionDialog(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFff6b6b),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        child: isConnecting
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              )
+                            : const Text('Connect'),
+                      ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 16),
+
+              // Main content area
               Expanded(
-                child: ElevatedButton(
-                  onPressed: !isConnected ? null : disconnectFromDesktop,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: const Text('Disconnect'),
-                ),
+                child: isConnected ? _buildControllerInterface() : _buildConnectionPrompt(),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Text(
-            isConnecting
-                ? 'Connecting...'
-                : isConnected
-                    ? isStreaming
-                        ? 'Screen sharing active'
-                        : 'Connected - Ready to share screen'
-                    : 'Disconnected',
-            style: TextStyle(
-              color: isConnecting
-                  ? Colors.orange
-                  : isConnected
-                      ? isStreaming
-                          ? Colors.green
-                          : Colors.blue
-                      : Colors.red,
-              fontSize: 18,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (isConnected && !isStreaming)
-            ElevatedButton(
-              onPressed: startScreenSharing,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Start Screen Sharing'),
-            ),
-          if (isStreaming)
-            ElevatedButton(
-              onPressed: stopScreenSharing,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Stop Screen Sharing'),
-            ),
-          Expanded(
-            child: _buildPlayerWidget(),
-          ),
-          const SizedBox(height: 16),
-          const Text('Camera Streaming to Desktop', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              ElevatedButton(
-                onPressed: isConnected && isInitialized && !isStreaming ? startCameraStreaming : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Start Camera'),
-              ),
-              ElevatedButton(
-                onPressed: isStreaming ? stopCameraStreaming : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Stop Camera'),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
-    ));
+    );
   }
 }

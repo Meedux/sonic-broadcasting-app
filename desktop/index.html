@@ -3,48 +3,799 @@
   <head>
     <meta charset="UTF-8" />
     <title>Sonic Broadcasting - Desktop</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      body { font-family: Arial, sans-serif; background-color: #ffffff; color: #dc143c; margin: 0; padding: 20px; }
-      .container { max-width: 1200px; margin: 0 auto; }
-      .header { text-align: center; margin-bottom: 20px; }
-      .pairing { background: #f0f0f0; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
-      .controls { display: flex; gap: 10px; margin-bottom: 20px; }
-      button { background: #dc143c; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
-      button:hover { background: #b01030; }
-      .preview { border: 2px solid #dc143c; width: 100%; height: 300px; background: #000; margin-bottom: 10px; }
-      .stream-status { border: 2px solid #dc143c; width: 100%; height: 150px; background: #f0f0f0; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; }
-      .status { margin-bottom: 20px; }
-      input { padding: 5px; margin: 5px; }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #0a0a0a;
+        color: #ffffff;
+        margin: 0;
+        padding: 0;
+        overflow-x: hidden;
+        min-height: 100vh;
+      }
+
+      .app-container {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        position: relative;
+      }
+
+      /* Header */
+      .header {
+        background: #1a1a1a;
+        border-bottom: 2px solid #dc143c;
+        padding: 0.75rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-shadow: 0 2px 10px rgba(220, 20, 60, 0.3);
+      }
+
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .logo-icon {
+        width: 32px;
+        height: 32px;
+        background: linear-gradient(45deg, #dc143c, #ff4757);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: bold;
+        color: white;
+        animation: pulse 2s infinite;
+      }
+
+      .logo-text {
+        font-size: 1.25rem;
+        font-weight: 700;
+        background: linear-gradient(45deg, #dc143c, #ff4757);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-left: 0.5rem;
+      }
+
+      .status-bar {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+      }
+
+      .status-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
+      }
+
+      .status-connected {
+        background: rgba(220, 20, 60, 0.2);
+        color: #ff4757;
+        border: 1px solid rgba(220, 20, 60, 0.4);
+      }
+
+      .status-disconnected {
+        background: rgba(255, 255, 255, 0.1);
+        color: #888;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+
+      /* Broadcasting Toolbar */
+      .broadcast-toolbar {
+        background: #0f0f0f;
+        border-bottom: 1px solid #333;
+        padding: 0.5rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.85rem;
+      }
+
+      .toolbar-left {
+        display: flex;
+        align-items: center;
+        gap: 2rem;
+      }
+
+      .toolbar-metric {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #ccc;
+      }
+
+      .metric-value {
+        color: #ff4757;
+        font-weight: 600;
+      }
+
+      .toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .toolbar-btn {
+        background: #2a2a2a;
+        border: 1px solid #444;
+        color: #fff;
+        padding: 0.25rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .toolbar-btn:hover {
+        background: #3a3a2a;
+        border-color: #dc143c;
+      }
+
+      /* Main Content - Full Width Layout */
+      .main-content {
+        flex: 1;
+        display: flex;
+        gap: 0;
+        padding: 0;
+        width: 100%;
+        height: calc(100vh - 120px); /* Adjusted for toolbar */
+        position: relative;
+      }
+
+      /* Left Panel - Controls and Stats */
+      .left-panel {
+        width: 350px;
+        display: flex;
+        flex-direction: column;
+        background: #1a1a1a;
+        border-right: 2px solid #dc143c;
+        padding: 1.5rem;
+        overflow-y: auto;
+        box-shadow: 5px 0 15px rgba(220, 20, 60, 0.1);
+      }
+
+      /* Right Section - Previews */
+      .right-section {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+        min-height: 100%;
+      }
+
+      /* Screen Preview - Top half of right side */
+      .screen-preview-section {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 1rem;
+        background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+        border-bottom: 1px solid #333;
+      }
+
+      /* Camera Preview - Bottom half of right side */
+      .camera-preview-section {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 1rem;
+        background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+      }
+
+      /* Stream Section */
+      .stream-section {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+
+      .stream-card {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 1rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        transition: all 0.3s ease;
+      }
+
+      .stream-card:hover {
+        border-color: #dc143c;
+        box-shadow: 0 6px 20px rgba(220, 20, 60, 0.2);
+      }
+
+      .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+      }
+
+      .card-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #ffffff;
+      }
+
+      .stream-status {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.9rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 12px;
+        font-weight: 500;
+      }
+
+      .status-live {
+        background: rgba(220, 20, 60, 0.2);
+        color: #ff4757;
+        border: 1px solid rgba(220, 20, 60, 0.4);
+      }
+
+      .status-offline {
+        background: rgba(255, 255, 255, 0.1);
+        color: #888;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+
+      .preview-container.live {
+        box-shadow: 0 0 30px rgba(220, 20, 60, 0.5), 0 4px 20px rgba(0, 0, 0, 0.3);
+        animation: glow 2s ease-in-out infinite alternate;
+      }
+
+      @keyframes glow {
+        from {
+          box-shadow: 0 0 30px rgba(220, 20, 60, 0.5), 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        to {
+          box-shadow: 0 0 40px rgba(220, 20, 60, 0.8), 0 6px 25px rgba(0, 0, 0, 0.4);
+        }
+      }
+
+      .preview-video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      .stream-overlay {
+        position: absolute;
+        top: 0.75rem;
+        left: 0.75rem;
+        background: rgba(220, 20, 60, 0.9);
+        backdrop-filter: blur(10px);
+        padding: 0.25rem 0.75rem;
+        border-radius: 15px;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .live-indicator {
+        width: 6px;
+        height: 6px;
+        background: #ff4757;
+        border-radius: 50%;
+        animation: pulse-red 1.5s infinite;
+      }
+
+      /* Controls */
+      .control-group {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .control-buttons {
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      .btn {
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .btn-primary {
+        background: linear-gradient(45deg, #dc143c, #ff4757);
+        color: white;
+        box-shadow: 0 2px 8px rgba(220, 20, 60, 0.3);
+      }
+
+      .btn-primary:hover {
+        background: linear-gradient(45deg, #b01030, #e84118);
+        box-shadow: 0 4px 12px rgba(220, 20, 60, 0.4);
+      }
+
+      .btn-secondary {
+        background: #2a2a2a;
+        color: white;
+        border: 1px solid #444;
+      }
+
+      .btn-secondary:hover {
+        background: #3a3a3a;
+        border-color: #dc143c;
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none !important;
+      }
+
+      .rtmp-input {
+        flex: 1;
+        padding: 0.5rem 0.75rem;
+        border: 1px solid #444;
+        border-radius: 8px;
+        background: #2a2a2a;
+        color: white;
+        font-size: 0.8rem;
+      }
+
+      .rtmp-input::placeholder {
+        color: #888;
+      }
+
+      .rtmp-input:focus {
+        outline: none;
+        border-color: #dc143c;
+        box-shadow: 0 0 0 2px rgba(220, 20, 60, 0.2);
+      }
+
+      /* Chat Section */
+      .chat-card {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 300px;
+      }
+
+      .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        margin-bottom: 1rem;
+        max-height: 200px;
+      }
+
+      .chat-message {
+        margin-bottom: 0.5rem;
+        padding: 0.5rem;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        font-size: 0.85rem;
+      }
+
+      .chat-username {
+        color: #ff4757;
+        font-weight: 600;
+      }
+
+      .chat-text {
+        color: #ffffff;
+        margin-left: 0.5rem;
+      }
+
+      .chat-input-container {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+
+      .chat-input {
+        flex: 1;
+        padding: 0.5rem 0.75rem;
+        border: 1px solid #444;
+        border-radius: 8px;
+        background: #2a2a2a;
+        color: white;
+        font-size: 0.85rem;
+      }
+
+      .chat-input::placeholder {
+        color: #888;
+      }
+
+      .chat-input:focus {
+        outline: none;
+        border-color: #dc143c;
+        box-shadow: 0 0 0 2px rgba(220, 20, 60, 0.2);
+      }
+
+      .chat-send-btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.8rem;
+      }
+
+      .stats-card {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 1rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+      }
+
+      .stats-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        color: #ffffff;
+      }
+
+      .stat-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .stat-item:last-child {
+        border-bottom: none;
+      }
+
+      .stat-label {
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      .stat-value {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #ffffff;
+      }
+
+      .gift-stats {
+        margin-top: 1rem;
+      }
+
+      .gift-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem 0;
+        animation: slideIn 0.5s ease-out;
+      }
+
+      .gift-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+      }
+
+      .gift-rose { background: linear-gradient(45deg, #dc143c, #ff4757); }
+      .gift-heart { background: linear-gradient(45deg, #dc143c, #ff6b6b); }
+      .gift-star { background: linear-gradient(45deg, #ff4757, #ff3838); }
+      .gift-crown { background: linear-gradient(45deg, #dc143c, #b01030); }
+
+      .gift-info {
+        flex: 1;
+      }
+
+      .gift-name {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #ffffff;
+      }
+
+      .gift-count {
+        font-size: 0.8rem;
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      /* Animations */
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+      }
+
+      @keyframes blink {
+        0%, 50% { opacity: 1; }
+        51%, 100% { opacity: 0.5; }
+      }
+
+      @keyframes pulse-red {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateX(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+
+      @keyframes bounce {
+        0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+        40% { transform: translateY(-10px); }
+        60% { transform: translateY(-5px); }
+      }
+
+      /* Responsive */
+      @media (max-width: 1200px) {
+        .main-content {
+          flex-direction: column;
+        }
+
+        .stream-preview-section {
+          padding: 1rem;
+        }
+
+        .right-panel {
+          width: 100%;
+          border-left: none;
+          border-top: 2px solid #dc143c;
+          padding: 1rem;
+          max-height: 50vh;
+        }
+      }
+
+      @media (max-width: 768px) {
+        .main-content {
+          height: auto;
+        }
+
+        .stream-preview-section {
+          padding: 0.5rem;
+        }
+
+        .right-panel {
+          max-height: 60vh;
+          padding: 0.5rem;
+        }
+
+        .header {
+          padding: 0.5rem;
+          flex-direction: column;
+          gap: 0.5rem;
+        }
+
+        .status-bar {
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 0.5rem;
+        }
+
+        .logo-text {
+          font-size: 1rem;
+        }
+
+        .control-buttons {
+          flex-direction: column;
+        }
+
+        .btn {
+          width: 100%;
+          justify-content: center;
+        }
+      }
+
+      /* Loading states */
+      .loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+      }
+
+      .spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-top: 2px solid white;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
     </style>
   </head>
   <body>
-    <div class="container">
-      <div class="header">
-        <h1>Sonic Broadcasting - Desktop</h1>
-      </div>
-      <div class="pairing">
-        <h2>Pairing Code: <span id="pairing-code">Generating...</span></h2>
-        <p>Desktop IP: <span id="local-ip">Detecting...</span></p>
-        <p>Status: <span id="status">Waiting for pairing</span></p>
-        <p>Screen Sharing: <span id="screen-status">Not Active</span></p>
-      </div>
-      <div class="controls">
-        <h3>Livestream to Social Platforms</h3>
-        <input type="text" id="rtmp-url" placeholder="rtmp://youtube.com/live/YOUR_STREAM_KEY" style="width: 400px;">
-        <button id="start-livestream">Start Livestream</button>
-        <button id="stop-livestream">Stop Livestream</button>
-      </div>
-      <div class="preview">
-        <video id="preview" autoplay muted style="width: 100%; height: 100%;"></video>
-      </div>
-      <div class="stream-status">
-        <div id="stream-indicator" style="text-align: center;">
-          <div style="font-size: 24px; margin-bottom: 10px;">🔴</div>
-          <div>WebRTC Stream: <span id="stream-status-text">Not Streaming</span></div>
-          <div style="font-size: 12px; margin-top: 5px; color: #666;">Connected to mobile</div>
+    <div class="app-container">
+      <!-- Header -->
+      <header class="header">
+        <div class="logo">
+          <div class="logo-icon">🎙️</div>
+          <div class="logo-text">Sonic Broadcasting</div>
+        </div>
+        <div class="status-bar">
+          <div class="status-item status-disconnected" id="connection-status">
+            <div class="status-indicator"></div>
+            <span id="status-text">Disconnected</span>
+          </div>
+          <div class="status-item status-offline" id="stream-status">
+            <span id="screen-status-text">Screen Offline</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Broadcasting Toolbar -->
+      <div class="broadcast-toolbar">
+        <div class="toolbar-left">
+          <div class="toolbar-metric">
+            <span>👁️ Viewers:</span>
+            <span class="metric-value" id="viewer-count">0</span>
+          </div>
+          <div class="toolbar-metric">
+            <span>📊 Bitrate:</span>
+            <span class="metric-value" id="bitrate">0 kbps</span>
+          </div>
+          <div class="toolbar-metric">
+            <span>⏱️ Uptime:</span>
+            <span class="metric-value" id="uptime">00:00:00</span>
+          </div>
+        </div>
+        <div class="toolbar-right">
+          <button class="toolbar-btn" id="settings-btn">⚙️ Settings</button>
+          <button class="toolbar-btn" id="record-btn">⏺️ Record</button>
         </div>
       </div>
+
+      <!-- Main Content -->
+      <main class="main-content">
+        <!-- Left Panel - Controls and Stats -->
+        <aside class="left-panel">
+          <!-- Stream Controls -->
+          <div class="stream-card">
+            <div class="card-header">
+              <h3 class="card-title">Stream Controls</h3>
+            </div>
+            <div class="control-group">
+              <input type="text" id="rtmp-url" class="rtmp-input" placeholder="rtmp://youtube.com/live/YOUR_STREAM_KEY">
+              <div class="control-buttons">
+                <button id="start-livestream" class="btn btn-primary" disabled>
+                  <span>▶️</span> Start
+                </button>
+                <button id="stop-livestream" class="btn btn-secondary" disabled>
+                  <span>⏹️</span> Stop
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Connection Info -->
+          <div class="stats-card">
+            <h4 class="stats-title">Connection Info</h4>
+            <div class="stat-item">
+              <span class="stat-label">Pairing Code</span>
+              <span class="stat-value" id="pairing-code">Generating...</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Desktop IP</span>
+              <span class="stat-value" id="local-ip">Detecting...</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Status</span>
+              <span class="stat-value" id="status">Waiting for pairing</span>
+            </div>
+          </div>
+
+          <!-- Gift Statistics -->
+          <div class="stats-card">
+            <h4 class="stats-title">Gift Statistics</h4>
+            <div class="stat-item">
+              <span class="stat-label">Total Gifts</span>
+              <span class="stat-value" id="total-gifts">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Total Value</span>
+              <span class="stat-value" id="total-value">$0.00</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Top Gifter</span>
+              <span class="stat-value" id="top-gifter">-</span>
+            </div>
+
+            <div class="gift-stats">
+              <h5 style="color: #ffffff; font-size: 0.9rem; margin-bottom: 0.5rem;">Recent Gifts</h5>
+              <div id="gift-list">
+                <!-- Gifts will be added here dynamically -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Chat Section -->
+          <div class="stats-card chat-card">
+            <h4 class="stats-title">Live Chat</h4>
+            <div class="chat-messages" id="chat-messages">
+              <!-- Chat messages will be added here -->
+            </div>
+            <div class="chat-input-container">
+              <input type="text" id="chat-input" class="chat-input" placeholder="Type a message...">
+              <button id="send-chat" class="btn btn-primary chat-send-btn">Send</button>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Right Section - Previews -->
+        <section class="right-section">
+          <!-- Screen Preview - Top -->
+          <div class="screen-preview-section">
+            <div class="stream-card">
+              <div class="card-header">
+                <h3 class="card-title">Screen Capture</h3>
+                <div class="stream-status status-offline" id="live-status">
+                  <div class="live-indicator" id="live-indicator" style="display: none;"></div>
+                  <span id="stream-status-text">Offline</span>
+                </div>
+              </div>
+              <div class="preview-container">
+                <video id="preview" autoplay muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+                <div class="stream-overlay" id="stream-overlay" style="display: none;">
+                  <div class="live-indicator"></div>
+                  LIVE
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Camera Preview - Bottom -->
+          <div class="camera-preview-section">
+            <div class="stream-card">
+              <div class="card-header">
+                <h3 class="card-title">Camera Feed</h3>
+                <div class="stream-status status-offline" id="camera-status">
+                  <span id="camera-status-text">Offline</span>
+                </div>
+              </div>
+              <div class="preview-container">
+                <video id="camera-preview" autoplay muted style="width: 100%; height: 100%; object-fit: contain;"></video>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
+
     <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
     <script type="module" src="/src/renderer.js"></script>
   </body>

@@ -1,38 +1,44 @@
 # Sonic Broadcasting App
 
-A cross-platform livestreaming application consisting of a desktop host and mobile controller/camera.
+A cross-platform livestreaming application consisting of a desktop broadcasting software and mobile controller/camera.
 
 ## Features
 
 ### Desktop App
-- Screen capture and preview
-- RTSP streaming using FFmpeg
+- Professional broadcasting software interface with dark theme and red accents
+- Full-width layout: Left panel (controls, gift statistics, live chat), Right panel (screen capture top, camera feed bottom)
+- Screen capture and real-time preview with WebRTC streaming
+- RTMP livestreaming support using FFmpeg
 - WebSocket server for device pairing
-- Vertical stacked layout showing screen capture and stream status
+- Mock gift statistics with animations and real-time updates
+- Live chat with mock viewer messages
+- Viewer count, bitrate, and uptime metrics
 - 6-digit pairing code generation
-- **Displays local IP address** for easy mobile app connection
+- Local IP address display for easy mobile connection
 
 ### Mobile App
-- Camera preview and capture
-- RTSP stream reception using VLC player
+- Controller interface for desktop broadcasting
+- Full-width layout: Screen preview top, camera feed middle, live chat bottom
+- Camera preview and capture with WebRTC streaming
+- WebRTC client for receiving desktop screenshare
 - WebSocket client for pairing with desktop
-- Vertical stacked layout showing RTSP stream (screenshare) on top and camera preview below
-- **Configurable desktop IP address** for easy connection
-- **User feedback** with snackbar messages for connection status
-- **Loading state** with spinner on connect button during connection attempts
+- Configurable desktop IP address for connection
+- User feedback with snackbar messages for connection status
+- Loading states during connection attempts
 
 ### Streaming Layout
-Both apps feature a vertical stacked layout similar to YouTube Reels or TikTok livestreams:
-- **Top**: RTSP stream from desktop (screenshare)
-- **Bottom**: Camera preview from mobile device
-- Real-time streaming with low latency RTSP/RTP protocol
+Modern broadcasting layout optimized for full-width displays:
+- **Desktop Right Panel**: Screen capture (top half), Camera feed (bottom half)
+- **Mobile**: Screenshare preview (top), Camera (middle), Live chat (bottom)
+- Real-time WebRTC streaming with Mediasoup for low-latency communication
+- RTMP support for external platform streaming
 
 ## Architecture
 
-- **Desktop App (Electron)**: Main livestreaming host, RTSP server, screen capture, FFmpeg encoding and streaming
-- **Mobile App (Flutter)**: RTSP client using VLC player for receiving and displaying streams
-- **Connection**: WebSocket for signaling and pairing, RTSP for efficient video streaming
-- **Streaming Protocol**: RTSP/RTP for low-latency, high-efficiency video transmission
+- **Desktop App (Electron)**: Broadcasting host, WebRTC server with Mediasoup, screen/camera capture, FFmpeg RTMP streaming
+- **Mobile App (Flutter)**: WebRTC client with flutter_webrtc, camera access, controller interface
+- **Connection**: WebSocket for signaling and pairing, WebRTC with Mediasoup for efficient video streaming
+- **Streaming Protocol**: WebRTC for peer-to-peer screensharing, RTMP for platform broadcasting
 
 ## Requirements
 
@@ -42,12 +48,22 @@ Both apps feature a vertical stacked layout similar to YouTube Reels or TikTok l
 - Dart: 3.5.4
 
 ### FFmpeg Installation
-FFmpeg is required for video encoding and RTMP streaming on the desktop app.
+FFmpeg is required for RTMP streaming on the desktop app.
 
 #### Windows
 1. Download FFmpeg from https://ffmpeg.org/download.html
 2. Extract to a folder (e.g., `C:\ffmpeg`)
 3. Add to PATH or configure in app
+
+#### macOS
+```bash
+brew install ffmpeg
+```
+
+#### Linux
+```bash
+sudo apt update && sudo apt install ffmpeg
+```
 
 #### macOS
 ```bash
@@ -67,10 +83,10 @@ Location: `desktop/`
 #### Libraries Used
 - **Electron**: MIT License - Main framework for desktop app
 - **Vite**: MIT License - Build tool (used by create-electron-app template)
-- **ws**: MIT License - WebSocket server for signaling
-- **fluent-ffmpeg**: MIT License - FFmpeg wrapper for RTSP streaming
+- **mediasoup-client**: ISC License - WebRTC client for real-time communication
+- **socket.io-client**: MIT License - WebSocket client for signaling
+- **fluent-ffmpeg**: MIT License - FFmpeg wrapper for RTMP streaming
 - **electron-store**: MIT License - Data persistence
-- **Material-UI** (if React used): MIT License - UI components
 
 #### Build and Run
 ```bash
@@ -81,14 +97,14 @@ npm start
 
 #### Permissions
 - Screen capture requires user permission on first run
-- Microphone/camera access if needed for additional features
+- Camera access for camera feed preview
 
 ### Mobile (Flutter)
 Location: `mobile/`
 
 #### Libraries Used
 - **camera**: BSD-3-Clause License - Camera access
-- **flutter_vlc_player**: MIT License - VLC-based RTSP player
+- **flutter_webrtc**: MIT License - WebRTC client for real-time video
 - **socket_io_client**: MIT License - WebSocket client for signaling
 - **provider**: MIT License - State management
 
@@ -121,9 +137,10 @@ flutter run
 3. Desktop starts WebSocket server on local network
 4. Launch mobile app and enter the desktop IP address and 6-digit pairing code
 5. Mobile connects to desktop via WebSocket
-6. Desktop sends RTSP stream URL to mobile
-7. Desktop starts FFmpeg RTSP streaming of screen capture
-8. Mobile receives and displays RTSP stream using VLC player
+6. WebRTC handshake establishes peer-to-peer connection using Mediasoup
+7. Desktop captures screen and sends via WebRTC to mobile
+8. Mobile displays screenshare preview and can control desktop functions
+9. Desktop can start RTMP streaming to external platforms using FFmpeg
 
 ## Network Configuration
 
@@ -140,36 +157,38 @@ flutter run
 ## UI Design
 
 ### Desktop App
-OBS-like interface with red and white theme:
-- Main preview window showing combined stream
-- Start/Stop streaming buttons
-- Bitrate and status indicators
-- RTMP configuration inputs
-- Pairing code display
-- Layout controls for screen/camera positioning
+Professional broadcasting software interface:
+- Dark theme with red accent colors
+- Full-width layout optimized for modern displays
+- Left panel: Stream controls, connection info, gift statistics, live chat
+- Right panel: Screen capture preview (top), camera feed (bottom)
+- Animated elements and glowing effects during live streaming
+- Mock gift statistics with real-time updates
+- Live chat with viewer interactions
 
 ### Mobile App
-Clean Material 3 interface with red and white theme:
-- RTSP stream player using VLC
-- 6-digit pairing code input field
-- Connect/Disconnect buttons
-- Stream control buttons (Start, Stop, Pause)
-- Camera preview when not streaming
+Controller interface for broadcasting:
+- Dark theme with red accent colors matching desktop
+- Full-width layout: Screenshare preview (top), camera feed (middle), live chat (bottom)
+- WebRTC video display for desktop screenshare
+- Camera controls and preview
+- Live chat integration with desktop
+- Touch controls for broadcasting functions
 
 ## Error Handling
 - Automatic reconnection on connection loss
-- Retry logic for RTSP stream connection
+- Retry logic for WebRTC connection establishment
 - Validation of pairing codes
-- FFmpeg error handling and restart
-- VLC player error recovery
+- FFmpeg error handling for RTMP streaming
+- WebRTC peer connection recovery
 
 ## Security
 - Temporary 6-digit codes expire after use
 - Local network communication only
-- RTSP streaming over TCP for reliability
+- WebRTC DTLS encryption for video streams
 - No external servers required
 
 ## Development
 - All dependencies are open-source
-- Follow official documentation for integrations
+- Follow official documentation for WebRTC and Mediasoup integrations
 - Code is structured for maintainability and extensibility
