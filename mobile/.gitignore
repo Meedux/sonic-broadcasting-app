@@ -1,52 +1,43 @@
-# OSX
-#
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
 .DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
 
-# Xcode
-#
-build/
-*.pbxuser
-!default.pbxuser
-*.mode1v3
-!default.mode1v3
-*.mode2v3
-!default.mode2v3
-*.perspectivev3
-!default.perspectivev3
-xcuserdata
-*.xccheckout
-*.moved-aside
-DerivedData
-*.hmap
-*.ipa
-*.xcuserstate
-
-# Android/IntelliJ
-#
-build/
-.idea
-.gradle
-local.properties
+# IntelliJ related
 *.iml
-.cxx/
+*.ipr
+*.iws
+.idea/
 
-# node.js
-#
-node_modules/
-npm-debug.log
-yarn-error.log
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
 
-# BUCK
-buck-out/
-\.buckd/
-*.keystore
-!debug.keystore
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
 
-# Bundle artifact
-*.jsbundle
+# Symbolication related
+app.*.symbols
 
-# CocoaPods
-/ios/Pods/
-.env
-yarn.lock
-android/local.properties
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release

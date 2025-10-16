@@ -1,41 +1,47 @@
 {
   "name": "desktop",
-  "version": "0.1.0",
-  "private": true,
-  "main": "main.js",
+  "productName": "desktop",
+  "version": "1.0.0",
+  "description": "My Electron application description",
+  "main": ".vite/build/main.js",
   "scripts": {
-    "dev": "concurrently --kill-others \"next dev --turbo --port 3001\" \"wait-on http://localhost:3001 && npx electron .\"",
-    "dev:next": "next dev --turbo --port 3001",
-    "dev:electron": "wait-on http://localhost:3001 && npx electron .",
-    "build": "next build --turbo",
-    "start": "concurrently \"next start\" \"wait-on http://localhost:3000 && npx electron .\"",
-    "electron": "npx electron .",
-    "lint": "eslint"
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "echo \"No linting configured\""
+  },
+  "keywords": [],
+  "author": {
+    "name": "Meedux",
+    "email": "herrerojayemark@gmail.com"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.10.2",
+    "@electron-forge/maker-deb": "^7.10.2",
+    "@electron-forge/maker-rpm": "^7.10.2",
+    "@electron-forge/maker-squirrel": "^7.10.2",
+    "@electron-forge/maker-zip": "^7.10.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.10.2",
+    "@electron-forge/plugin-fuses": "^7.10.2",
+    "@electron-forge/plugin-vite": "^7.10.2",
+    "@electron/fuses": "^1.8.0",
+    "electron": "38.2.2",
+    "vite": "^5.4.20"
   },
   "dependencies": {
-    "@videosdk.live/react-native-sdk": "^0.3.12",
-    "@videosdk.live/react-sdk": "^0.4.2",
-    "electron": "^38.2.2",
-    "next": "15.5.4",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-native-camera": "^4.2.1",
-    "react-native-gesture-handler": "^2.28.0",
-    "react-native-permissions": "^5.4.2",
-    "react-native-webrtc": "^124.0.6"
-  },
-  "devDependencies": {
-    "@eslint/eslintrc": "^3",
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "concurrently": "^9.2.1",
-    "electron-builder": "^26.0.12",
-    "eslint": "^9",
-    "eslint-config-next": "15.5.4",
-    "tailwindcss": "^4",
-    "typescript": "^5",
-    "wait-on": "^9.0.1"
+    "bufferutil": "^4.0.9",
+    "electron-squirrel-startup": "^1.0.1",
+    "electron-store": "^11.0.2",
+    "fluent-ffmpeg": "^2.1.3",
+    "mediasoup": "^3.19.3",
+    "mediasoup-client": "^3.16.7",
+    "rtmp-server": "^0.2.0",
+    "simple-peer": "^9.11.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "utf-8-validate": "^6.0.5",
+    "ws": "^8.18.3"
   }
 }

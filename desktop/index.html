@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Sonic Broadcasting - Desktop</title>
+    <style>
+      body { font-family: Arial, sans-serif; background-color: #ffffff; color: #dc143c; margin: 0; padding: 20px; }
+      .container { max-width: 1200px; margin: 0 auto; }
+      .header { text-align: center; margin-bottom: 20px; }
+      .pairing { background: #f0f0f0; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+      .controls { display: flex; gap: 10px; margin-bottom: 20px; }
+      button { background: #dc143c; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+      button:hover { background: #b01030; }
+      .preview { border: 2px solid #dc143c; width: 100%; height: 300px; background: #000; margin-bottom: 10px; }
+      .stream-status { border: 2px solid #dc143c; width: 100%; height: 150px; background: #f0f0f0; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; }
+      .status { margin-bottom: 20px; }
+      input { padding: 5px; margin: 5px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Sonic Broadcasting - Desktop</h1>
+      </div>
+      <div class="pairing">
+        <h2>Pairing Code: <span id="pairing-code">Generating...</span></h2>
+        <p>Desktop IP: <span id="local-ip">Detecting...</span></p>
+        <p>Status: <span id="status">Waiting for pairing</span></p>
+        <p>Screen Sharing: <span id="screen-status">Not Active</span></p>
+      </div>
+      <div class="controls">
+        <h3>Livestream to Social Platforms</h3>
+        <input type="text" id="rtmp-url" placeholder="rtmp://youtube.com/live/YOUR_STREAM_KEY" style="width: 400px;">
+        <button id="start-livestream">Start Livestream</button>
+        <button id="stop-livestream">Stop Livestream</button>
+      </div>
+      <div class="preview">
+        <video id="preview" autoplay muted style="width: 100%; height: 100%;"></video>
+      </div>
+      <div class="stream-status">
+        <div id="stream-indicator" style="text-align: center;">
+          <div style="font-size: 24px; margin-bottom: 10px;">🔴</div>
+          <div>WebRTC Stream: <span id="stream-status-text">Not Streaming</span></div>
+          <div style="font-size: 12px; margin-top: 5px; color: #666;">Connected to mobile</div>
+        </div>
+      </div>
+    </div>
+    <script src="https://unpkg.com/simple-peer@9.11.1/simplepeer.min.js"></script>
+    <script type="module" src="/src/renderer.js"></script>
+  </body>
+</html>
