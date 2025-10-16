@@ -4,108 +4,9 @@ import io from 'socket.io-client';
 
 const { electronAPI } = window;
 
-// Elements
-const pairingCodeEl = document.getElementById('pairing-code');
-const statusEl = document.getElementById('status');
-const screenStatusEl = document.getElementById('screen-status');
-const startLivestreamBtn = document.getElementById('start-livestream');
-const stopLivestreamBtn = document.getElementById('stop-livestream');
-const rtmpUrlEl = document.getElementById('rtmp-url');
-const previewEl = document.getElementById('preview');
-const streamStatusTextEl = document.getElementById('stream-status-text');
-const streamIndicatorEl = document.getElementById('stream-indicator');
-const localIPEl = document.getElementById('local-ip');
-
-async function startScreenSharing() {
-  try {
-    console.log('Starting screen sharing with WebRTC...');
-
-    if (!screenStream) {
-      screenStream = await getScreenCapture();
-      previewEl.srcObject = screenStream;
-      previewEl.play();
-    }
-
-    // Create WebRTC peer connection
-    const peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
-    });
-
-    // Set up signaling listeners BEFORE creating offer
-    const handleAnswer = async (data) => {
-      console.log('Received WebRTC answer from mobile');
-      await peerConnection.setRemoteDescription({
-        sdp: data.sdp,
-        type: data.type
-      });
-      socket.off('webrtc-answer', handleAnswer); // Remove listener after handling
-    };
-
-    const handleIceCandidate = async (data) => {
-      console.log('Received ICE candidate from mobile');
-      await peerConnection.addIceCandidate({
-        candidate: data.candidate,
-        sdpMid: data.sdpMid,
-        sdpMLineIndex: data.sdpMLineIndex,
-      });
-    };
-
-    socket.on('webrtc-answer', handleAnswer);
-    socket.on('ice-candidate', handleIceCandidate);
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log('Sending ICE candidate to mobile');
-        socket.emit('ice-candidate', {
-          candidate: event.candidate.candidate,
-          sdpMid: event.candidate.sdpMid,
-          sdpMLineIndex: event.candidate.sdpMLineIndex,
-        });
-      }
-    };
-
-    peerConnection.onconnectionstatechange = (event) => {
-      console.log('Peer connection state:', peerConnection.connectionState);
-      if (peerConnection.connectionState === 'connected') {
-        console.log('WebRTC connection established');
-        socket.emit('stream-started');
-      }
-    };
-
-    // Add screen stream tracks
-    screenStream.getTracks().forEach(track => {
-      console.log('Adding track to peer connection:', track.kind);
-      peerConnection.addTrack(track, screenStream);
-    });
-
-    // Create offer
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-
-    console.log('Sending WebRTC offer to mobile');
-    // Send offer to mobile
-    socket.emit('webrtc-offer', {
-      sdp: offer.sdp,
-      type: offer.type
-    });
-
-    // Notify that screen sharing has started
-    socket.emit('screen-sharing-started');
-
-    // Store for cleanup
-    window.peerConnection = peerConnection;
-
-    console.log('Screen sharing started with WebRTC');
-    statusEl.textContent = 'Screen sharing active';
-
-  } catch (error) {
-    console.error('Error starting screen sharing:', error);
-    statusEl.textContent = 'Screen sharing failed: ' + error.message;
-  }
-}
-
+// Global variables
+let pairingCodeEl, statusEl, screenStatusEl, startLivestreamBtn, stopLivestreamBtn, rtmpUrlEl, previewEl, streamStatusTextEl, streamIndicatorEl, localIPEl;
+let peerConnection = null;
 let screenStream = null;
 let isStreaming = false;
 let isLivestreaming = false;
@@ -115,11 +16,257 @@ let videoProducer;
 let socket;
 let localIP = 'localhost';
 
-// Initialize
-initSocket();
-initScreenCapture();
+// Wait for DOM to be ready
+document.addEventListener('DOMContentLoaded', () => {
+  // Elements
+  pairingCodeEl = document.getElementById('pairing-code');
+  statusEl = document.getElementById('status');
+  screenStatusEl = document.getElementById('screen-status');
+  startLivestreamBtn = document.getElementById('start-livestream');
+  stopLivestreamBtn = document.getElementById('stop-livestream');
+  rtmpUrlEl = document.getElementById('rtmp-url');
+  previewEl = document.getElementById('preview');
+  streamStatusTextEl = document.getElementById('stream-status-text');
+  streamIndicatorEl = document.getElementById('stream-indicator');
+  localIPEl = document.getElementById('local-ip');
 
-async function initSocket() {
+  // Set up IPC listeners for WebRTC signaling from main process
+  electronAPI.onWebRTCOffer(async (data) => {
+    console.log('Received WebRTC offer from main process (forwarded from mobile)');
+    await handleWebRTCOffer(data);
+  });
+
+  electronAPI.onIceCandidate(async (data) => {
+    console.log('Received ICE candidate from main process (forwarded from mobile)');
+    await handleIceCandidate(data);
+  });
+
+  electronAPI.onStartScreenSharing(() => {
+    console.log('Received start screen sharing request from main process');
+    startScreenSharing();
+  });
+
+  electronAPI.onStopScreenSharing(() => {
+    console.log('Received stop screen sharing request from main process');
+    stopScreenSharing();
+  });
+
+  // Set up other IPC listeners
+  electronAPI.onPairingCode((event, code) => {
+    pairingCodeEl.textContent = code;
+  });
+
+  electronAPI.onLocalIP((event, ip) => {
+    localIP = ip;
+    localIPEl.textContent = ip;
+  });
+
+  electronAPI.onPaired(() => {
+    statusEl.textContent = 'Paired with mobile device - Screen sharing will start automatically';
+  });
+
+  electronAPI.onDisconnected(() => {
+    statusEl.textContent = 'Disconnected from mobile device';
+    screenStatusEl.textContent = 'Not Active';
+  });
+
+  // Initialize
+  initSocket();
+  initScreenCapture();
+
+    // Set up button event listeners
+  startLivestreamBtn.addEventListener('click', () => {
+    if (!isLivestreaming) {
+      startLivestream();
+    }
+  });
+
+  stopLivestreamBtn.addEventListener('click', () => {
+    if (isLivestreaming) {
+      stopLivestream();
+    }
+  });
+});
+
+// Function definitions
+async function handleWebRTCOffer(data) {
+  try {
+    console.log('Handling WebRTC offer from mobile');
+
+    // Create WebRTC peer connection if it doesn't exist
+    if (!peerConnection) {
+      peerConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' }
+        ]
+      });
+
+      // Set up ICE candidate handler
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('Sending ICE candidate to mobile');
+          // Send to main process which will forward to mobile
+          electronAPI.sendToWS({
+            type: 'ice-candidate',
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          });
+        }
+      };
+
+      peerConnection.onconnectionstatechange = (event) => {
+        console.log('Peer connection state:', peerConnection.connectionState);
+        if (peerConnection.connectionState === 'connected') {
+          console.log('WebRTC connection established');
+          // Send to main process which will forward to mobile
+          electronAPI.sendToWS({ type: 'stream-started' });
+          if (screenStatusEl) screenStatusEl.textContent = 'Connected - Streaming';
+          if (streamStatusTextEl) streamStatusTextEl.textContent = 'Connected';
+        }
+      };
+    }
+
+    // Set remote description (the offer from mobile)
+    await peerConnection.setRemoteDescription({
+      sdp: data.sdp,
+      type: data.type
+    });
+
+    // Add screen stream tracks (should already be captured by startScreenSharing)
+    if (screenStream) {
+      screenStream.getTracks().forEach(track => {
+        console.log('Adding screen track to peer connection:', track.kind);
+        peerConnection.addTrack(track, screenStream);
+      });
+    } else {
+      console.error('No screen stream available');
+      return;
+    }
+
+    // Create answer
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+
+    console.log('Sending WebRTC answer to mobile');
+    // Send answer to main process which will forward to mobile
+    electronAPI.sendToWS({
+      type: 'webrtc-answer',
+      sdp: answer.sdp,
+      type: answer.type
+    });
+
+  } catch (error) {
+    console.error('Error handling WebRTC offer:', error);
+  }
+}
+
+async function handleIceCandidate(data) {
+  if (peerConnection) {
+    try {
+      console.log('Adding ICE candidate from mobile');
+      await peerConnection.addIceCandidate({
+        candidate: data.candidate,
+        sdpMid: data.sdpMid,
+        sdpMLineIndex: data.sdpMLineIndex,
+      });
+    } catch (error) {
+      console.error('Error adding ICE candidate:', error);
+    }
+  }
+}
+
+async function startScreenSharing() {
+  try {
+    console.log('Setting up screen sharing - waiting for WebRTC offer from mobile...');
+
+    // Get screen capture if not already done
+    if (!screenStream) {
+      screenStream = await getScreenCapture();
+      if (previewEl) {
+        previewEl.srcObject = screenStream;
+        previewEl.play();
+      }
+      if (statusEl) statusEl.textContent = 'Screen captured - Waiting for mobile connection';
+    }
+
+    if (screenStatusEl) screenStatusEl.textContent = 'Active - Waiting for mobile';
+
+  } catch (error) {
+    console.error('Error starting screen sharing:', error);
+    if (statusEl) statusEl.textContent = 'Screen sharing failed: ' + error.message;
+  }
+}
+
+async function stopScreenSharing() {
+  console.log('Stopping screen sharing');
+
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+  }
+
+  if (screenStream) {
+    screenStream.getTracks().forEach(track => track.stop());
+    screenStream = null;
+  }
+
+  if (previewEl) previewEl.srcObject = null;
+  if (screenStatusEl) screenStatusEl.textContent = 'Not Active';
+  if (statusEl) statusEl.textContent = 'Screen sharing stopped';
+}
+
+async function getScreenCapture() {
+  try {
+    console.log('Getting screen capture...');
+    const sources = await electronAPI.getScreenSources();
+
+    if (!sources || sources.length === 0) {
+      throw new Error('No screen sources found');
+    }
+
+    const screenSource = sources[0];
+    console.log('Using screen source:', screenSource.name);
+
+    // Get screen stream using the main window's webContents
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: screenSource.id,
+          minWidth: 1280,
+          maxWidth: 1920,
+          minHeight: 720,
+          maxHeight: 1080
+        }
+      }
+    });
+
+    console.log('Screen stream obtained');
+    return stream;
+  } catch (err) {
+    console.error('Screen capture failed:', err);
+    throw err;
+  }
+}
+
+async function initScreenCapture() {
+  try {
+    console.log('Initializing screen capture...');
+    screenStream = await getScreenCapture();
+    if (previewEl) {
+      previewEl.srcObject = screenStream;
+      previewEl.play();
+    }
+    if (statusEl) statusEl.textContent = 'Screen captured - Ready to stream';
+  } catch (err) {
+    console.error('Screen capture failed:', err);
+    if (statusEl) statusEl.textContent = 'Screen capture failed: ' + err.message;
+  }
+}
+
+function initSocket() {
   socket = io('http://localhost:8080');
 
   socket.on('connect', () => {
@@ -129,226 +276,39 @@ async function initSocket() {
   socket.on('disconnect', () => {
     console.log('Disconnected from server');
   });
-
-  // Handle WebRTC signaling from mobile
-  socket.on('webrtc-offer', async (data) => {
-    console.log('Received WebRTC offer');
-    await handleWebRTCOffer(data);
-  });
-
-  socket.on('ice-candidate', (data) => {
-    console.log('Received ICE candidate');
-    if (producerTransport) {
-      producerTransport.addIceCandidate(data.candidate);
-    }
-  });
-
-  // Listen for screen sharing requests from mobile
-  electronAPI.onStartScreenSharing(() => {
-    console.log('Received start screen sharing request from mobile');
-    startScreenSharing();
-  });
-
-  electronAPI.onStopScreenSharing(() => {
-    console.log('Received stop screen sharing request from mobile');
-    stopWebRTCStreaming();
-  });
-
-  // Listen for ICE candidates from mobile
-  socket.on('ice-candidate', async (data) => {
-    console.log('Received ICE candidate from mobile');
-    // Handle ICE candidate in the active peer connection
-    if (window.peerConnection) {
-      try {
-        await window.peerConnection.addIceCandidate({
-          candidate: data.candidate,
-          sdpMid: data.sdpMid,
-          sdpMLineIndex: data.sdpMLineIndex,
-        });
-        console.log('ICE candidate added successfully');
-      } catch (error) {
-        console.error('Error adding ICE candidate:', error);
-      }
-    }
-  });
 }
 
-async function initScreenCapture() {
+async function startLivestream() {
+  if (!rtmpUrlEl) return;
+  const rtmpUrl = rtmpUrlEl.value.trim();
+  if (!rtmpUrl) {
+    alert('Please enter RTMP URL');
+    return;
+  }
+
   try {
-    console.log('Initializing screen capture...');
-    screenStream = await getScreenCapture();
-    previewEl.srcObject = screenStream;
-    previewEl.play();
-    statusEl.textContent = 'Screen captured - Ready to stream';
-  } catch (err) {
-    console.error('Screen capture failed:', err);
-    statusEl.textContent = 'Screen capture failed: ' + err.message;
-  }
-}
-
-// Display pairing code
-electronAPI.onPairingCode((event, code) => {
-  pairingCodeEl.textContent = code;
-});
-
-// Display local IP
-electronAPI.onLocalIP((event, ip) => {
-  localIP = ip;
-  localIPEl.textContent = ip;
-});
-
-// Handle pairing
-electronAPI.onPaired(() => {
-  statusEl.textContent = 'Paired with mobile device - Screen sharing will start automatically';
-  screenStatusEl.textContent = 'Starting...';
-});
-
-// Handle disconnect
-electronAPI.onDisconnected(() => {
-  statusEl.textContent = 'Disconnected';
-  screenStatusEl.textContent = 'Not Active';
-  isStreaming = false;
-  isLivestreaming = false;
-  updateButtons();
-});
-
-async function getScreenCapture() {
-  console.log('Calling getScreenSources...');
-  const sources = await electronAPI.getScreenSources();
-  console.log('Screen sources:', sources);
-  const source = sources[0];
-  if (!source) throw new Error('No screen source found');
-  return await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
-      mandatory: {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: source.id,
-      },
-    },
-  });
-}
-
-// Handle screen sharing requests from mobile (via main process)
-electronAPI.onStartScreenSharing(() => {
-  console.log('Received start screen sharing request');
-  startScreenSharing();
-});
-
-electronAPI.onStopScreenSharing(() => {
-  console.log('Received stop screen sharing request');
-  if (window.peerConnection) {
-    window.peerConnection.close();
-    window.peerConnection = null;
-  }
-  if (screenStream) {
-    screenStream.getTracks().forEach(track => track.stop());
-    screenStream = null;
-  }
-  socket.emit('screen-sharing-stopped');
-});
-electronAPI.onScreenSharingStarted(() => {
-  screenStatusEl.textContent = 'Active';
-  statusEl.textContent = 'Screen sharing active with mobile device';
-});
-
-electronAPI.onScreenSharingStopped(() => {
-  screenStatusEl.textContent = 'Not Active';
-  statusEl.textContent = 'Screen sharing stopped';
-});
-
-electronAPI.onScreenSharingError((event, error) => {
-  screenStatusEl.textContent = 'Error';
-  statusEl.textContent = 'Screen sharing error: ' + error;
-});
-
-electronAPI.onLivestreamStarted(() => {
-  statusEl.textContent = 'Livestream started';
-});
-
-electronAPI.onLivestreamEnded(() => {
-  statusEl.textContent = 'Livestream stopped';
-  isLivestreaming = false;
-  updateButtons();
-});
-
-electronAPI.onLivestreamError((event, error) => {
-  statusEl.textContent = 'Livestream error: ' + error;
-  isLivestreaming = false;
-  updateButtons();
-});
-
-async function handleWebRTCOffer(data) {
-  try {
-    console.log('Handling WebRTC offer...');
-
-    // Get router RTP capabilities from server
-    const routerRtpCapabilities = await new Promise((resolve) => {
-      socket.emit('get-router-rtp-capabilities');
-      socket.once('router-rtp-capabilities', resolve);
-    });
-
-    // Create device
-    device = new mediasoupClient.Device();
-    await device.load({ routerRtpCapabilities });
-
-    // Create send transport
-    const transportData = await new Promise((resolve) => {
-      socket.emit('create-transport', { direction: 'send' });
-      socket.once('transport-created', resolve);
-    });
-
-    producerTransport = device.createSendTransport(transportData);
-
-    producerTransport.on('connect', ({ dtlsParameters }, callback) => {
-      socket.emit('transport-connect', { transportId: producerTransport.id, dtlsParameters });
-      socket.once('transport-connected', callback);
-    });
-
-    producerTransport.on('produce', ({ kind, rtpParameters }, callback) => {
-      socket.emit('transport-produce', { transportId: producerTransport.id, kind, rtpParameters });
-      socket.once('transport-produced', ({ id }) => callback({ id }));
-    });
-
-    // Start screen sharing
-    if (screenStream) {
-      const videoTrack = screenStream.getVideoTracks()[0];
-      videoProducer = await producerTransport.produce({ track: videoTrack });
-
-      console.log('Screen sharing started');
-      socket.emit('screen-sharing-started');
+    if (!screenStream) {
+      screenStream = await getScreenCapture();
     }
+
+    // Send to main process to start FFmpeg livestream
+    electronAPI.sendToWS({ type: 'start-livestream', rtmpUrl });
+    isLivestreaming = true;
+    if (statusEl) statusEl.textContent = 'Livestreaming started';
+    updateButtons();
 
   } catch (error) {
-    console.error('Error handling WebRTC offer:', error);
-    socket.emit('screen-sharing-error', error.message);
+    console.error('Error starting livestream:', error);
+    if (statusEl) statusEl.textContent = 'Livestream error: ' + error.message;
   }
 }
 
-startLivestreamBtn.addEventListener('click', () => {
-  if (!isLivestreaming) {
-    startLivestream();
-  }
-});
+// function updateButtons() {
+//   // Update button states based on streaming status
+//   // Note: These buttons might not exist in the current UI
+// }
 
-stopLivestreamBtn.addEventListener('click', () => {
-  if (isLivestreaming) {
-    stopLivestream();
-  }
-});
-
-function startStreaming() {
-  startWebRTCStreaming();
-  statusEl.textContent = 'Starting WebRTC stream...';
-}
-
-function stopStreaming() {
-  stopWebRTCStreaming();
-  statusEl.textContent = 'Stopping WebRTC stream...';
-}
-
-// Initialize button states
-updateButtons();
+console.log('Desktop renderer loaded');
 
 async function startWebRTCStreaming() {
   try {
@@ -471,30 +431,6 @@ async function stopWebRTCStreaming() {
     <div style="font-size: 12px; margin-top: 5px; color: #666;">Not connected</div>
   `;
   updateButtons();
-}
-
-async function startLivestream() {
-  const rtmpUrl = rtmpUrlEl.value.trim();
-  if (!rtmpUrl) {
-    alert('Please enter RTMP URL');
-    return;
-  }
-
-  try {
-    if (!screenStream) {
-      screenStream = await getScreenCapture();
-    }
-
-    // Send to main process to start FFmpeg livestream
-    electronAPI.sendToWS({ type: 'start-livestream', rtmpUrl });
-    isLivestreaming = true;
-    statusEl.textContent = 'Livestreaming started';
-    updateButtons();
-
-  } catch (error) {
-    console.error('Error starting livestream:', error);
-    statusEl.textContent = 'Livestream error: ' + error.message;
-  }
 }
 
 async function stopLivestream() {

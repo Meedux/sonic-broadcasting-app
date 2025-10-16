@@ -153,33 +153,32 @@ class _MobileHomePageState extends State<MobileHomePage> {
         });
         print('Successfully paired with desktop');
 
-        // Request router RTP capabilities for WebRTC
-        socket!.emit('get-router-rtp-capabilities');
-
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Successfully paired with desktop! Setting up WebRTC...')),
+          const SnackBar(content: Text('Successfully paired with desktop!')),
         );
-      });
-
-
-
-      socket!.on('webrtc-offer', (data) async {
-        print('Received WebRTC offer');
-        await handleOffer(data);
       });
 
       socket!.on('webrtc-answer', (data) async {
-        print('Received WebRTC answer');
-        await peerConnection!.setRemoteDescription(
-          RTCSessionDescription(data['sdp'], data['type'])
-        );
+        print('Received WebRTC answer from desktop');
+        try {
+          await peerConnection!.setRemoteDescription(
+            RTCSessionDescription(data['sdp'], data['type'])
+          );
+          print('WebRTC answer set successfully');
+        } catch (error) {
+          print('Error setting WebRTC answer: $error');
+        }
       });
 
       socket!.on('ice-candidate', (data) async {
-        print('Received ICE candidate');
-        await peerConnection!.addCandidate(
-          RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex'])
-        );
+        print('Received ICE candidate from desktop');
+        try {
+          await peerConnection!.addCandidate(
+            RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex'])
+          );
+        } catch (error) {
+          print('Error adding ICE candidate: $error');
+        }
       });
 
       socket!.on('screen-sharing-started', (_) {
@@ -257,10 +256,66 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
 
 
-  void startScreenSharing() {
+  void startScreenSharing() async {
     if (socket != null && isConnected) {
-      print('Requesting screen sharing from desktop');
-      socket!.emit('start-screen-sharing');
+      print('Creating WebRTC offer for screen sharing');
+      setState(() {
+        isConnecting = true;
+      });
+
+      try {
+        // Create WebRTC peer connection
+        peerConnection = await createPeerConnection({
+          'iceServers': [
+            {'urls': 'stun:stun.l.google.com:19302'}
+          ]
+        });
+
+        peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
+          print('Sending ICE candidate from mobile');
+          socket!.emit('ice-candidate', {
+            'candidate': candidate.candidate,
+            'sdpMid': candidate.sdpMid,
+            'sdpMLineIndex': candidate.sdpMLineIndex,
+          });
+        };
+
+        peerConnection!.onAddStream = (MediaStream stream) {
+          print('Received remote stream on mobile');
+          remoteRenderer!.srcObject = stream;
+          setState(() {
+            isWebRTCConnected = true;
+            isStreaming = true;
+            isConnecting = false;
+          });
+        };
+
+        peerConnection!.onConnectionState = (RTCPeerConnectionState state) {
+          print('Mobile peer connection state: $state');
+          if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+            print('WebRTC connection established on mobile');
+          }
+        };
+
+        // Create offer
+        RTCSessionDescription offer = await peerConnection!.createOffer();
+        await peerConnection!.setLocalDescription(offer);
+
+        print('Sending WebRTC offer to desktop');
+        socket!.emit('webrtc-offer', {
+          'sdp': offer.sdp,
+          'type': offer.type,
+        });
+
+      } catch (error) {
+        print('Error creating WebRTC offer: $error');
+        setState(() {
+          isConnecting = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start screen sharing: $error')),
+        );
+      }
     }
   }
 

@@ -116,52 +116,6 @@ const createWebRtcTransport = async () => {
   return transport;
 };
 
-const handleWebRTCOffer = async (socket, offer) => {
-  try {
-    // Create consumer transport for mobile
-    consumerTransport = await createWebRtcTransport();
-
-    // Set up transport event handlers
-    consumerTransport.on('icestatechange', (state) => {
-      console.log('Consumer transport ICE state:', state);
-    });
-
-    consumerTransport.on('icecandidate', (candidate) => {
-      socket.emit('ice-candidate', { candidate: candidate.toJSON() });
-    });
-
-    // Consume the screen producer
-    if (producer) {
-      const consumer = await consumerTransport.consume({
-        producerId: producer.id,
-        rtpCapabilities: router.rtpCapabilities,
-        paused: false,
-      });
-
-      consumer.on('transportclose', () => {
-        console.log('Consumer transport closed');
-      });
-
-      consumer.on('producerclose', () => {
-        console.log('Producer closed');
-      });
-
-      // Create answer
-      const answer = {
-        type: 'answer',
-        sdp: consumerTransport.sdp,
-      };
-
-      return answer;
-    } else {
-      throw new Error('No screen producer available');
-    }
-  } catch (error) {
-    console.error('Error handling WebRTC offer:', error);
-    throw error;
-  }
-};
-
 const createWindow = () => {
   // Create the browser window.
   mainWindow = new BrowserWindow({
@@ -442,24 +396,13 @@ const createWindow = () => {
 
     // WebRTC signaling from mobile
     socket.on('webrtc-offer', async (data) => {
-      console.log('Received WebRTC offer from mobile');
-      try {
-        const offer = data.offer;
-        const answer = await handleWebRTCOffer(socket, offer);
-        socket.emit('webrtc-answer', { answer });
-      } catch (error) {
-        console.error('Error handling WebRTC offer:', error);
-      }
+      console.log('Received WebRTC offer from mobile, forwarding to renderer');
+      mainWindow.webContents.send('webrtc-offer', data);
     });
 
     socket.on('ice-candidate', (data) => {
-      console.log('Received ICE candidate, forwarding to other clients');
-      // Forward to all other clients (both mobile and renderer)
-      io.sockets.sockets.forEach(s => {
-        if (s !== socket) {
-          s.emit('ice-candidate', data);
-        }
-      });
+      console.log('Received ICE candidate from mobile, forwarding to renderer');
+      mainWindow.webContents.send('ice-candidate', data);
     });
 
     socket.on('start-screen-sharing', async () => {
@@ -471,45 +414,26 @@ const createWindow = () => {
       console.log('Mobile requested to stop screen sharing - forwarding to renderer');
       mainWindow.webContents.send('stop-screen-sharing');
     });
-
-    socket.on('stream-started', (data) => {
-      console.log('Received stream-started from renderer, forwarding to mobile');
-      if (connectedClient) {
-        connectedClient.emit('stream-started', data);
-      }
-    });
-
-    socket.on('webrtc-offer', (data) => {
-      console.log('Received WebRTC offer from renderer, forwarding to mobile');
-      if (connectedClient) {
-        connectedClient.emit('webrtc-offer', data);
-      }
-    });
-
-    socket.on('webrtc-answer', (data) => {
-      console.log('Received WebRTC answer from mobile, forwarding to renderer');
-      // Forward to all other clients
-      io.sockets.sockets.forEach(s => {
-        if (s !== socket) {
-          s.emit('webrtc-answer', data);
-        }
-      });
-    });
-
-    socket.on('ice-candidate', (data) => {
-      console.log('Received ICE candidate, forwarding');
-      // Forward to all other clients
-      io.sockets.sockets.forEach(s => {
-        if (s !== socket) {
-          s.emit('ice-candidate', data);
-        }
-      });
-    });
   });
 };
 ipcMain.on('send-to-ws', (event, data) => {
   if (connectedClient) {
-    connectedClient.emit('message', data);
+    if (data.type === 'webrtc-answer') {
+      connectedClient.emit('webrtc-answer', {
+        sdp: data.sdp,
+        type: data.type
+      });
+    } else if (data.type === 'ice-candidate') {
+      connectedClient.emit('ice-candidate', {
+        candidate: data.candidate,
+        sdpMid: data.sdpMid,
+        sdpMLineIndex: data.sdpMLineIndex,
+      });
+    } else if (data.type === 'stream-started') {
+      connectedClient.emit('stream-started', data);
+    } else {
+      connectedClient.emit('message', data);
+    }
   }
 });
 
