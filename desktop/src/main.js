@@ -2,18 +2,22 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 // const WebSocket = require('ws');
-const io = require('socket.io')(8080, {
+import { Server as SocketIOServer } from 'socket.io';
+import ffmpeg from 'fluent-ffmpeg';
+import http from 'http';
+import fs from 'fs';
+import url from 'url';
+import { exec } from 'child_process';
+import mediasoup from 'mediasoup';
+import RtmpServer from 'rtmp-server';
+import { networkInterfaces } from 'os';
+
+const io = new SocketIOServer(8080, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   }
 });
-const ffmpeg = require('fluent-ffmpeg');
-const http = require('http');
-const fs = require('fs');
-const url = require('url');
-const mediasoup = require('mediasoup');
-const RtmpServer = require('rtmp-server');
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -42,7 +46,7 @@ const generatePairingCode = () => {
 };
 
 const getLocalIPAddress = () => {
-  const { networkInterfaces } = require('os');
+  
   const nets = networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
@@ -89,6 +93,57 @@ const createMediasoupWorker = async () => {
   router = await worker.createRouter({ mediaCodecs });
   console.log('Mediasoup router created');
 };
+
+// Helper: check if the installed ffmpeg binary supports a given input format
+async function ffmpegSupportsFormat(format) {
+  return new Promise((resolve) => {
+    exec('ffmpeg -hide_banner -formats', (err, stdout, stderr) => {
+      if (err) {
+        console.warn('ffmpeg -formats failed:', err.message || err);
+        return resolve(false);
+      }
+      try {
+        const out = stdout + '\n' + stderr;
+        resolve(out.includes(format));
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  });
+}
+
+// Helper: list dshow devices using ffmpeg (Windows)
+async function ffmpegListDshowDevices() {
+  return new Promise((resolve) => {
+    // ffmpeg prints device list to stderr
+    exec('ffmpeg -hide_banner -list_devices true -f dshow -i dummy', (err, stdout, stderr) => {
+      if (err && !stderr) {
+        console.warn('ffmpeg dshow probe failed:', err.message || err);
+        return resolve([]);
+      }
+      const out = String(stderr || stdout);
+      const lines = out.split(/\r?\n/);
+      const devices = [];
+      let captureSection = false;
+      for (const line of lines) {
+        const l = line.trim();
+        // Example line: "\t"DirectShow video devices (some may be both video and audio devices)\n"
+        // Device lines typically look like: "\t"\"Integrated Camera\"\n"
+        const m = l.match(/^"(.*)"$/);
+        if (m) {
+          devices.push(m[1]);
+          continue;
+        }
+        // Another pattern: [dshow @ 000002...] "\t"  "USB2.0 HD UVC WebCam" (device)
+        const m2 = l.match(/^\[.*\]\s+"(.*)"$/);
+        if (m2) devices.push(m2[1]);
+      }
+      // Remove duplicates and empty
+      const uniq = Array.from(new Set(devices.filter(Boolean)));
+      resolve(uniq);
+    });
+  });
+}
 
 const createWebRtcTransport = async () => {
   const transport = await router.createWebRtcTransport({
@@ -153,46 +208,105 @@ const createWindow = () => {
   });
 
   // Start Socket.IO server
-  // Start HTTP server for HLS streaming
+  // Start embedded static server for HLS with improved caching headers
   httpServer = http.createServer((req, res) => {
-    const parsedUrl = url.parse(req.url, true);
-    const pathname = parsedUrl.pathname;
+    try {
+      const parsedUrl = url.parse(req.url || '', true);
+      let pathname = parsedUrl.pathname || '/';
 
-    if (pathname === '/hls/stream.m3u8' || pathname.endsWith('.ts') || pathname.endsWith('.mp4')) {
-      const filePath = pathname.startsWith('/hls/') 
-        ? path.join(process.cwd(), 'hls', pathname.substring(5))
-        : path.join(process.cwd(), pathname.substring(1));
-      fs.access(filePath, fs.constants.F_OK, (err) => {
-        if (err) {
+      // Normalize and prevent path traversal
+      pathname = decodeURIComponent(pathname);
+      if (pathname.indexOf('..') !== -1) {
+        res.writeHead(400);
+        res.end('Bad request');
+        return;
+      }
+
+      // Only serve files under /hls/
+      if (!pathname.startsWith('/hls/')) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+
+      const relative = pathname.substring('/hls/'.length);
+      const filePath = path.join(process.cwd(), 'hls', relative);
+
+      fs.stat(filePath, (err, stats) => {
+        if (err || !stats.isFile()) {
           res.writeHead(404);
-          res.end('File not found');
+          res.end('Not found');
           return;
         }
-        const fileStream = fs.createReadStream(filePath);
-        let contentType;
-        if (pathname.endsWith('.m3u8')) {
+
+        const ext = path.extname(filePath).toLowerCase();
+        let contentType = 'application/octet-stream';
+        let cacheControl = 'no-cache, no-store, must-revalidate';
+
+        if (ext === '.m3u8') {
           contentType = 'application/vnd.apple.mpegurl';
-        } else if (pathname.endsWith('.ts')) {
+          // playlists should not be cached aggressively
+          cacheControl = 'no-cache, no-store, must-revalidate';
+        } else if (ext === '.ts') {
           contentType = 'video/MP2T';
-        } else if (pathname.endsWith('.mp4')) {
+          // segments can be cached briefly to reduce chattiness
+          cacheControl = 'public, max-age=5';
+        } else if (ext === '.mp4') {
           contentType = 'video/mp4';
+          cacheControl = 'public, max-age=3600';
         }
-        res.writeHead(200, {
-          'Content-Type': contentType,
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': 'Origin, X-Requested-With, Content-Type, Accept',
-          'Cache-Control': 'no-cache'
-        });
-        fileStream.pipe(res);
+
+        // Common headers
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+        res.setHeader('Cache-Control', cacheControl);
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
+        // Support HEAD
+        if (req.method === 'HEAD') {
+          res.writeHead(200);
+          res.end();
+          return;
+        }
+
+        // For mp4, support Range requests for seeking; for HLS (.m3u8/.ts) simple streaming is fine
+        if (req.headers.range && ext === '.mp4') {
+          const range = req.headers.range;
+          const parts = range.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+          if (start >= stats.size || end >= stats.size) {
+            res.writeHead(416, { 'Content-Range': `bytes */${stats.size}` });
+            res.end();
+            return;
+          }
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': (end - start) + 1,
+            'Content-Type': contentType
+          });
+          const stream = fs.createReadStream(filePath, { start, end });
+          stream.pipe(res);
+        } else {
+          res.writeHead(200, { 'Content-Length': stats.size });
+          const stream = fs.createReadStream(filePath);
+          stream.pipe(res);
+        }
       });
-    } else {
-      res.writeHead(404);
-      res.end('Not found');
+    } catch (e) {
+      console.error('Static server error:', e);
+      try {
+        res.writeHead(500);
+        res.end('Server error');
+      } catch (e2) {}
     }
   });
 
   httpServer.listen(8081, () => {
-    console.log('HTTP server started on port 8081 for HLS streaming');
+    console.log('Embedded HLS static server started on port 8081 (serving /hls/)');
   });
 
   console.log('Socket.IO server started on port 8080');
@@ -408,11 +522,31 @@ const createWindow = () => {
     socket.on('start-screen-sharing', async () => {
       console.log('Mobile requested screen sharing - forwarding to renderer');
       mainWindow.webContents.send('start-screen-sharing');
+      // Also start HLS livestream (no RTMP) so mobile can play via HLS
+      try {
+        if (!ffmpegProcess) {
+          console.log('Starting HLS livestream in response to mobile request');
+          await startLivestream();
+        } else {
+          console.log('Livestream already running');
+        }
+      } catch (e) {
+        console.error('Error starting HLS livestream from mobile request:', e);
+        socket.emit('error', { message: 'Failed to start screen sharing: ' + e.message });
+      }
     });
 
     socket.on('stop-screen-sharing', () => {
       console.log('Mobile requested to stop screen sharing - forwarding to renderer');
       mainWindow.webContents.send('stop-screen-sharing');
+      try {
+        if (ffmpegProcess) {
+          console.log('Stopping livestream in response to mobile request');
+          stopLivestream();
+        }
+      } catch (e) {
+        console.error('Error stopping livestream from mobile request:', e);
+      }
     });
   });
 };
@@ -437,10 +571,29 @@ ipcMain.on('send-to-ws', (event, data) => {
   }
 });
 
+// Expose direct start/stop livestream IPC for the renderer UI
+ipcMain.handle('start-livestream', async (event, rtmpUrl) => {
+  try {
+    await startLivestream(rtmpUrl);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('stop-livestream', async () => {
+  try {
+    stopLivestream();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // Get screen sources
 ipcMain.handle('get-screen-sources', async () => {
   console.log('get-screen-sources handler called');
-  const { desktopCapturer } = require('electron');
+  const { desktopCapturer } = await import('electron');
   const sources = await desktopCapturer.getSources({ types: ['screen'] });
   console.log('Screen sources found:', sources.length);
   return sources;
@@ -486,109 +639,47 @@ ipcMain.handle('update-m3u8-playlist', async (event, segments) => {
 function startRTSPStream() {
   return new Promise(async (resolve, reject) => {
     try {
-      console.log('Starting HLS stream with MediaRecorder...');
+      // Ask the renderer to start HLS recording (MediaRecorder runs in renderer)
+      const timeoutMs = 10000;
+      let resolved = false;
 
-      // Get screen sources using desktopCapturer
-      const { desktopCapturer } = require('electron');
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: 1, height: 1 } // Minimal thumbnail for performance
-      });
-
-      if (!sources || sources.length === 0) {
-        throw new Error('No screen sources found');
-      }
-
-      const screenSource = sources[0];
-      console.log('Using screen source:', screenSource.name);
-
-      // Get screen stream using the main window's webContents
-      const stream = await mainWindow.webContents.executeJavaScript(`
-        navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: '${screenSource.id}',
-              minWidth: 1280,
-              maxWidth: 1920,
-              minHeight: 720,
-              maxHeight: 1080
-            }
-          }
-        })
-      `);
-
-      console.log('Screen stream obtained, creating HLS segments...');
-
-      // Create HLS directory
-      const hlsDir = path.join(process.cwd(), 'hls');
-      if (!fs.existsSync(hlsDir)) {
-        fs.mkdirSync(hlsDir);
-      }
-
-      let segmentCounter = 0;
-      const segments = [];
-      let m3u8Content = '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n';
-
-      // Create MediaRecorder for HLS segments
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'video/webm;codecs=vp9'
-      });
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          segmentCounter++;
-          const segmentName = `segment_${segmentCounter}.webm`;
-          const segmentPath = path.join(hlsDir, segmentName);
-
-          // Convert blob to buffer and save
-          const reader = new FileReader();
-          reader.onload = () => {
-            const buffer = Buffer.from(reader.result);
-            fs.writeFileSync(segmentPath, buffer);
-            segments.push({ name: segmentName, duration: 2 }); // Assume 2 second segments
-
-            // Update M3U8 playlist
-            m3u8Content += `#EXTINF:2.0,\n${segmentName}\n`;
-
-            // Keep only last 10 segments
-            if (segments.length > 10) {
-              const oldSegment = segments.shift();
-              try {
-                fs.unlinkSync(path.join(hlsDir, oldSegment.name));
-              } catch (e) {
-                // Ignore cleanup errors
-              }
-            }
-
-            // Write M3U8 file
-            const m3u8Path = path.join(hlsDir, 'stream.m3u8');
-            fs.writeFileSync(m3u8Path, m3u8Content + '#EXT-X-ENDLIST\n');
-          };
-          reader.readAsArrayBuffer(event.data);
-        }
+      const cleanup = () => {
+        ipcMain.removeAllListeners('hls-started');
+        ipcMain.removeAllListeners('hls-error');
       };
 
-      // Start recording with 2 second chunks
-      mediaRecorder.start(2000);
+      ipcMain.once('hls-started', () => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        console.log('Renderer reported HLS started');
+        mainWindow.webContents.send('stream-started');
+        resolve();
+      });
 
-      // Store recorder for cleanup
-      ffmpegProcess = {
-        kill: () => {
-          try {
-            mediaRecorder.stop();
-            stream.getTracks().forEach(track => track.stop());
-          } catch (e) {
-            console.log('Error stopping media recorder:', e);
-          }
+      ipcMain.once('hls-error', (event, msg) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        console.error('Renderer reported HLS error:', msg);
+        mainWindow.webContents.send('stream-error', msg);
+        reject(new Error(msg));
+      });
+
+      // Instruct renderer to start recording
+      mainWindow.webContents.send('start-hls-recording', { segmentDuration: 2000 });
+
+      // Fallback timeout
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          const msg = 'Timeout waiting for renderer to start HLS recording';
+          console.error(msg);
+          mainWindow.webContents.send('stream-error', msg);
+          reject(new Error(msg));
         }
-      };
-
-      console.log('HLS streaming started with MediaRecorder');
-      mainWindow.webContents.send('stream-started');
-      resolve();
-
+      }, timeoutMs);
     } catch (error) {
       console.error('Error starting HLS stream:', error);
       mainWindow.webContents.send('stream-error', error.message);
@@ -599,11 +690,17 @@ function startRTSPStream() {
 
 // Stop RTSP streaming
 function stopRTSPStream() {
+  // Tell renderer to stop recording
+  try {
+    mainWindow.webContents.send('stop-hls-recording');
+  } catch (e) {
+    console.error('Error sending stop-hls-recording to renderer:', e);
+  }
   if (ffmpegProcess) {
     ffmpegProcess.kill();
     ffmpegProcess = null;
-    mainWindow.webContents.send('stream-stopped');
   }
+  mainWindow.webContents.send('stream-stopped');
 }
 
 // Start livestream to RTMP
@@ -613,7 +710,7 @@ function startLivestream(rtmpUrl) {
       console.log('Starting livestream to:', rtmpUrl);
 
       // Get screen sources
-      const { desktopCapturer } = require('electron');
+  const { desktopCapturer } = await import('electron');
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: { width: 1, height: 1 }
@@ -625,18 +722,65 @@ function startLivestream(rtmpUrl) {
 
       const screenSource = sources[0];
 
-      // Use FFmpeg to stream to RTMP
+      // Ensure HLS directory exists
+      const hlsDir = path.join(process.cwd(), 'hls');
+      if (!fs.existsSync(hlsDir)) fs.mkdirSync(hlsDir, { recursive: true });
+
+      const hlsPath = path.join(hlsDir, 'stream.m3u8');
+
+      // Probe dshow devices and select the best candidate for screen capture
+      console.log('Probing for dshow devices to use for capture...');
+      let dshowDevice = null;
+      try {
+        const devices = await ffmpegListDshowDevices();
+        console.log('dshow devices found:', devices);
+        if (devices && devices.length > 0) {
+          // Prefer devices that look like screen capture or virtual display
+          dshowDevice = devices.find(d => /screen|capture|monitor|display|virtual|obs/i.test(d)) || devices[0];
+          console.log('Selected dshow device for capture:', dshowDevice);
+        }
+      } catch (e) {
+        console.warn('Error probing dshow devices:', e);
+      }
+
+      if (!dshowDevice) {
+        const msg = 'No DirectShow screen-capture device found. Install a DirectShow screen-capture driver (e.g. "screen-capture-recorder") or install OBS and use obs-websocket.\n' +
+          'Alternatively, continue with the MediaRecorder->HLS fallback.';
+        console.error(msg);
+        mainWindow.webContents.send('livestream-error', msg);
+        // Fall back to MediaRecorder HLS so the feature still works without extra installs
+        try {
+          await startRTSPStream();
+          if (connectedClient) {
+            try {
+              connectedClient.emit('screen-sharing-started', { hlsUrl: `http://${getLocalIPAddress()}:8081/hls/stream.m3u8` });
+            } catch (e) {
+              console.error('Error emitting screen-sharing-started to client after fallback:', e);
+            }
+          }
+          resolve();
+          return;
+        } catch (err) {
+          console.error('Error during fallback HLS start:', err);
+          mainWindow.webContents.send('livestream-error', err.message || String(err));
+          reject(err);
+          return;
+        }
+      }
+
+      // Use FFmpeg to stream to RTMP (optional) and also produce HLS segments for mobile playback
+      // Use dshow capture device
       ffmpegProcess = ffmpeg()
-        .input(`desktop`)
+        .input(`video=${dshowDevice}`)
         .inputOptions([
-          '-f', 'gdigrab',
+          '-f', 'dshow',
           '-framerate', '30',
-          '-offset_x', '0',
-          '-offset_y', '0',
           '-video_size', '1920x1080'
-        ])
-        .output(rtmpUrl)
-        .outputOptions([
+        ]);
+
+      // Conditionally add RTMP output if rtmpUrl provided
+      if (rtmpUrl) {
+        ffmpegProcess = ffmpegProcess.output(rtmpUrl).outputOptions([
           '-c:v', 'libx264',
           '-preset', 'veryfast',
           '-maxrate', '3000k',
@@ -648,10 +792,37 @@ function startLivestream(rtmpUrl) {
           '-ac', '2',
           '-ar', '44100',
           '-f', 'flv'
-        ])
+        ]);
+      }
+
+      // Always produce HLS output
+      ffmpegProcess = ffmpegProcess.output(hlsPath).outputOptions([
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-maxrate', '3000k',
+        '-bufsize', '6000k',
+        '-pix_fmt', 'yuv420p',
+        '-g', '60',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-ac', '2',
+        '-ar', '44100',
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '6',
+        '-hls_flags', 'delete_segments+append_list'
+      ])
         .on('start', (commandLine) => {
-          console.log('FFmpeg command: ' + commandLine);
+          console.log('FFmpeg started: ' + commandLine);
           mainWindow.webContents.send('livestream-started');
+          // Notify connected mobile client that screen sharing / HLS is available
+          if (connectedClient) {
+            try {
+              connectedClient.emit('screen-sharing-started', { hlsUrl: `http://${getLocalIPAddress()}:8081/hls/stream.m3u8` });
+            } catch (e) {
+              console.error('Error emitting screen-sharing-started to client:', e);
+            }
+          }
           resolve();
         })
         .on('error', (err) => {
@@ -662,6 +833,14 @@ function startLivestream(rtmpUrl) {
         .on('end', () => {
           console.log('FFmpeg ended');
           mainWindow.webContents.send('livestream-ended');
+          // Notify mobile client that screen sharing stopped
+          if (connectedClient) {
+            try {
+              connectedClient.emit('screen-sharing-stopped');
+            } catch (e) {
+              console.error('Error emitting screen-sharing-stopped to client:', e);
+            }
+          }
         })
         .run();
 
@@ -679,6 +858,13 @@ function stopLivestream() {
     ffmpegProcess.kill('SIGINT');
     ffmpegProcess = null;
     mainWindow.webContents.send('livestream-ended');
+    if (connectedClient) {
+      try {
+        connectedClient.emit('screen-sharing-stopped');
+      } catch (e) {
+        console.error('Error emitting screen-sharing-stopped to client:', e);
+      }
+    }
   }
 }
 

@@ -90,6 +90,75 @@ document.addEventListener('DOMContentLoaded', () => {
     stopScreenSharing();
   });
 
+  // HLS recording (MediaRecorder) control from main
+  electronAPI.onStartHlsRecording(async (event, opts) => {
+    console.log('Renderer: start-hls-recording received', opts);
+    try {
+      // Request display capture
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      console.log('Renderer: obtained display stream for HLS');
+
+      const hlsDir = 'hls'; // main process handles saving segments
+      let segmentCounter = 0;
+      const segments = [];
+
+      const options = { mimeType: 'video/webm;codecs=vp8' };
+      const mediaRecorder = new MediaRecorder(stream, options);
+
+      mediaRecorder.ondataavailable = async (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          segmentCounter++;
+          const name = `segment_${segmentCounter}.webm`;
+          try {
+            const arrayBuffer = await ev.data.arrayBuffer();
+            await electronAPI.saveHLSSegment(name, new Uint8Array(arrayBuffer));
+            segments.push({ name, duration: Math.round((opts && opts.segmentDuration) ? opts.segmentDuration / 1000 : 2) });
+            // Keep only last 10
+            if (segments.length > 10) segments.shift();
+            await electronAPI.updateM3U8Playlist(segments);
+          } catch (e) {
+            console.error('Error saving HLS segment:', e);
+          }
+        }
+      };
+
+      mediaRecorder.onstart = () => {
+        console.log('MediaRecorder started for HLS');
+        // Notify main that HLS recording started
+        electronAPI.notifyHlsStarted();
+      };
+
+      mediaRecorder.onerror = (err) => {
+        console.error('MediaRecorder error:', err);
+        electronAPI.notifyHlsError(String(err));
+      };
+
+      // Store on window so stop handler can access it
+      window.__hlsRecorder = { mediaRecorder, stream };
+
+      mediaRecorder.start(opts && opts.segmentDuration ? opts.segmentDuration : 2000);
+    } catch (e) {
+      console.error('Renderer: error starting HLS recording:', e);
+      electronAPI.notifyHlsError(String(e));
+    }
+  });
+
+  electronAPI.onStopHlsRecording(() => {
+    console.log('Renderer: stop-hls-recording received');
+    try {
+      const rec = window.__hlsRecorder;
+      if (rec && rec.mediaRecorder && rec.mediaRecorder.state !== 'inactive') {
+        rec.mediaRecorder.stop();
+      }
+      if (rec && rec.stream) {
+        rec.stream.getTracks().forEach(t => t.stop());
+      }
+      window.__hlsRecorder = null;
+    } catch (e) {
+      console.error('Renderer: error stopping HLS recording:', e);
+    }
+  });
+
   // Set up other IPC listeners
   electronAPI.onPairingCode((event, code) => {
     pairingCodeEl.textContent = code;
@@ -656,8 +725,11 @@ async function startLivestream() {
       screenStream = await getScreenCapture();
     }
 
-    // Send to main process to start FFmpeg livestream
-    electronAPI.sendToWS({ type: 'start-livestream', rtmpUrl });
+    // Send to main process to start FFmpeg livestream (RTMP + HLS)
+    const res = await electronAPI.startLivestream(rtmpUrl);
+    if (!res || !res.success) {
+      throw new Error(res && res.error ? res.error : 'Unknown error starting livestream');
+    }
     isLivestreaming = true;
     if (statusEl) statusEl.textContent = 'Livestreaming started';
     updateButtons();
@@ -799,7 +871,7 @@ async function stopWebRTCStreaming() {
 }
 
 async function stopLivestream() {
-  electronAPI.sendToWS({ type: 'stop-livestream' });
+  await electronAPI.stopLivestream();
   isLivestreaming = false;
   statusEl.textContent = 'Livestreaming stopped';
   updateButtons();

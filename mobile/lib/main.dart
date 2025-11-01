@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:flutter_vlc_player/flutter_vlc_player.dart';
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
@@ -55,6 +56,9 @@ class _MobileHomePageState extends State<MobileHomePage> {
   RTCPeerConnection? peerConnection;
   RTCVideoRenderer screenRenderer = RTCVideoRenderer();
   bool isScreenSharingActive = false;
+  // HLS/RTMP playback controller (for low-latency local playback via HLS)
+  VlcPlayerController? _vlcController;
+  bool isHlsPlaying = false;
   MemoryImage? screenImage;
 
   io.Socket? socket;
@@ -220,12 +224,49 @@ class _MobileHomePageState extends State<MobileHomePage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Screen sharing started!')),
         );
+        // Auto-play HLS stream served by desktop at http://<desktop-ip>:8081/hls/stream.m3u8
+        try {
+          final ip = ipController.text.trim().isNotEmpty ? ipController.text.trim() : desktopIP;
+          final hlsUrl = 'http://$ip:8081/hls/stream.m3u8';
+          // Start VLC player
+          _vlcController?.stop();
+          _vlcController?.dispose();
+          // Try to explicitly request full hardware acceleration if the enum is available
+          // Note: some versions of flutter_vlc_player expose enum values in lowercase (e.g. HwAcc.full)
+          // while others use uppercase. We choose the lowercase form which is the most common Dart style.
+          try {
+            _vlcController = VlcPlayerController.network(
+              hlsUrl,
+              hwAcc: HwAcc.full,
+              autoPlay: true,
+            );
+          } catch (e) {
+            // Fallback to default if the enum member isn't available in this plugin version
+            _vlcController = VlcPlayerController.network(
+              hlsUrl,
+              autoPlay: true,
+            );
+          }
+          setState(() {
+            isHlsPlaying = true;
+          });
+        } catch (e) {
+          print('Error starting HLS playback: $e');
+        }
       });
 
       socket!.on('screen-sharing-stopped', (_) {
         setState(() {
           isStreaming = false;
         });
+        // Stop HLS playback
+        try {
+          _vlcController?.stop();
+          _vlcController?.dispose();
+          _vlcController = null;
+        } catch (e) {
+          print('Error stopping HLS playback: $e');
+        }
       });
 
       socket!.on('screen-sharing-error', (error) {
@@ -581,8 +622,14 @@ class _MobileHomePageState extends State<MobileHomePage> {
               borderRadius: BorderRadius.circular(14),
               child: Stack(
                 children: [
-                  // Screen preview from WebRTC stream
-                  if (isScreenSharingActive && screenRenderer.srcObject != null)
+                  // Screen preview from WebRTC stream OR HLS playback via VLC
+                  if (isHlsPlaying && _vlcController != null)
+                    VlcPlayer(
+                      controller: _vlcController!,
+                      aspectRatio: 16 / 9,
+                      placeholder: const Center(child: CircularProgressIndicator()),
+                    )
+                  else if (isScreenSharingActive && screenRenderer.srcObject != null)
                     RTCVideoView(screenRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain)
                   else
                     Center(
@@ -716,39 +763,49 @@ class _MobileHomePageState extends State<MobileHomePage> {
                         color: Color(0xFFff6b6b),
                       ),
                     ),
-                  // Camera controls overlay
+                  // Camera controls overlay (use Wrap to avoid overflow on narrow screens)
                   Positioned(
                     bottom: 8,
                     left: 8,
                     right: 8,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        IconButton(
-                          onPressed: () {},
-                          icon: const Icon(Icons.camera_alt, size: 20),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.black.withOpacity(0.5),
-                            foregroundColor: Colors.white,
+                    child: Center(
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          IconButton(
+                            onPressed: () {},
+                            icon: const Icon(Icons.camera_alt, size: 18),
+                            style: IconButton.styleFrom(
+                              padding: const EdgeInsets.all(6),
+                              minimumSize: const Size(36, 36),
+                              backgroundColor: Colors.black.withOpacity(0.5),
+                              foregroundColor: Colors.white,
+                            ),
                           ),
-                        ),
-                        IconButton(
-                          onPressed: () {},
-                          icon: const Icon(Icons.mic, size: 20),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.black.withOpacity(0.5),
-                            foregroundColor: Colors.white,
+                          IconButton(
+                            onPressed: () {},
+                            icon: const Icon(Icons.mic, size: 18),
+                            style: IconButton.styleFrom(
+                              padding: const EdgeInsets.all(6),
+                              minimumSize: const Size(36, 36),
+                              backgroundColor: Colors.black.withOpacity(0.5),
+                              foregroundColor: Colors.white,
+                            ),
                           ),
-                        ),
-                        IconButton(
-                          onPressed: () {},
-                          icon: const Icon(Icons.switch_camera, size: 20),
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.black.withOpacity(0.5),
-                            foregroundColor: Colors.white,
+                          IconButton(
+                            onPressed: () {},
+                            icon: const Icon(Icons.switch_camera, size: 18),
+                            style: IconButton.styleFrom(
+                              padding: const EdgeInsets.all(6),
+                              minimumSize: const Size(36, 36),
+                              backgroundColor: Colors.black.withOpacity(0.5),
+                              foregroundColor: Colors.white,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ],
