@@ -5,7 +5,8 @@ import io from 'socket.io-client';
 const { electronAPI } = window;
 
 // Global variables
-let pairingCodeEl, statusEl, screenStatusEl, startLivestreamBtn, stopLivestreamBtn, rtmpUrlEl, previewEl, streamStatusTextEl, streamIndicatorEl, localIPEl;
+let pairingCodeEl, statusEl, screenStatusEl, previewEl, streamStatusTextEl, streamIndicatorEl, localIPEl;
+let screenSelectEl, selectScreenBtn, stopScreenBtn;
 let connectionStatusEl, streamStatusEl, liveStatusEl, liveIndicatorEl, streamOverlayEl;
 let totalGiftsEl, totalValueEl, topGifterEl, giftListEl;
 let viewerCountEl, bitrateEl, uptimeEl;
@@ -48,9 +49,9 @@ document.addEventListener('DOMContentLoaded', () => {
   pairingCodeEl = document.getElementById('pairing-code');
   statusEl = document.getElementById('status');
   screenStatusEl = document.getElementById('screen-status');
-  startLivestreamBtn = document.getElementById('start-livestream');
-  stopLivestreamBtn = document.getElementById('stop-livestream');
-  rtmpUrlEl = document.getElementById('rtmp-url');
+  selectScreenBtn = document.getElementById('select-screen-btn');
+  stopScreenBtn = document.getElementById('stop-screen-btn');
+  screenSelectEl = document.getElementById('screen-source-select');
   previewEl = document.getElementById('preview');
   streamStatusTextEl = document.getElementById('stream-status-text');
   streamIndicatorEl = document.getElementById('stream-indicator');
@@ -90,74 +91,8 @@ document.addEventListener('DOMContentLoaded', () => {
     stopScreenSharing();
   });
 
-  // HLS recording (MediaRecorder) control from main
-  electronAPI.onStartHlsRecording(async (event, opts) => {
-    console.log('Renderer: start-hls-recording received', opts);
-    try {
-      // Request display capture
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      console.log('Renderer: obtained display stream for HLS');
+  // HLS / MediaRecorder fallback removed - using desktopCapturer + native WebRTC
 
-      const hlsDir = 'hls'; // main process handles saving segments
-      let segmentCounter = 0;
-      const segments = [];
-
-      const options = { mimeType: 'video/webm;codecs=vp8' };
-      const mediaRecorder = new MediaRecorder(stream, options);
-
-      mediaRecorder.ondataavailable = async (ev) => {
-        if (ev.data && ev.data.size > 0) {
-          segmentCounter++;
-          const name = `segment_${segmentCounter}.webm`;
-          try {
-            const arrayBuffer = await ev.data.arrayBuffer();
-            await electronAPI.saveHLSSegment(name, new Uint8Array(arrayBuffer));
-            segments.push({ name, duration: Math.round((opts && opts.segmentDuration) ? opts.segmentDuration / 1000 : 2) });
-            // Keep only last 10
-            if (segments.length > 10) segments.shift();
-            await electronAPI.updateM3U8Playlist(segments);
-          } catch (e) {
-            console.error('Error saving HLS segment:', e);
-          }
-        }
-      };
-
-      mediaRecorder.onstart = () => {
-        console.log('MediaRecorder started for HLS');
-        // Notify main that HLS recording started
-        electronAPI.notifyHlsStarted();
-      };
-
-      mediaRecorder.onerror = (err) => {
-        console.error('MediaRecorder error:', err);
-        electronAPI.notifyHlsError(String(err));
-      };
-
-      // Store on window so stop handler can access it
-      window.__hlsRecorder = { mediaRecorder, stream };
-
-      mediaRecorder.start(opts && opts.segmentDuration ? opts.segmentDuration : 2000);
-    } catch (e) {
-      console.error('Renderer: error starting HLS recording:', e);
-      electronAPI.notifyHlsError(String(e));
-    }
-  });
-
-  electronAPI.onStopHlsRecording(() => {
-    console.log('Renderer: stop-hls-recording received');
-    try {
-      const rec = window.__hlsRecorder;
-      if (rec && rec.mediaRecorder && rec.mediaRecorder.state !== 'inactive') {
-        rec.mediaRecorder.stop();
-      }
-      if (rec && rec.stream) {
-        rec.stream.getTracks().forEach(t => t.stop());
-      }
-      window.__hlsRecorder = null;
-    } catch (e) {
-      console.error('Renderer: error stopping HLS recording:', e);
-    }
-  });
 
   // Set up other IPC listeners
   electronAPI.onPairingCode((event, code) => {
@@ -183,21 +118,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize
   initSocket();
-  initScreenCapture();
+  populateScreenSources();
   initCameraCapture();
 
-  // Set up button event listeners
-  startLivestreamBtn.addEventListener('click', () => {
-    if (!isLivestreaming) {
-      startLivestream();
-    }
-  });
+  // Set up screen selection UI listeners
+  if (selectScreenBtn) {
+    selectScreenBtn.addEventListener('click', async () => {
+      const sourceId = screenSelectEl ? screenSelectEl.value : '';
+      if (!sourceId) {
+        alert('Please select a screen or window to share');
+        return;
+      }
+      await startScreenSharing(sourceId);
+      if (stopScreenBtn) stopScreenBtn.disabled = false;
+      if (selectScreenBtn) selectScreenBtn.disabled = true;
+    });
+  }
 
-  stopLivestreamBtn.addEventListener('click', () => {
-    if (isLivestreaming) {
-      stopLivestream();
-    }
-  });
+  if (stopScreenBtn) {
+    stopScreenBtn.addEventListener('click', () => {
+      stopScreenSharing();
+      if (stopScreenBtn) stopScreenBtn.disabled = true;
+      if (selectScreenBtn) selectScreenBtn.disabled = false;
+    });
+  }
 
   // Chat functionality
   const chatInputEl = document.getElementById('chat-input');
@@ -432,13 +376,13 @@ function updateGiftUI() {
 }
 
 
-async function startScreenSharing() {
+async function startScreenSharing(sourceId) {
   try {
     console.log('Starting WebRTC screen sharing...');
 
     // Get screen capture
     if (!screenStream) {
-      screenStream = await getScreenCapture();
+      screenStream = await getScreenCapture(sourceId);
     }
 
     // Create WebRTC peer connection
@@ -464,25 +408,81 @@ async function startScreenSharing() {
       peerConnection.addTrack(track, screenStream);
     });
 
-    // Set up ICE candidate handling
+    // Send ICE candidates to mobile via signaling
     peerConnection.onicecandidate = (event) => {
-      if (event.candidate && socket && socket.connected) {
-        socket.emit('screen-ice-candidate', {
-          candidate: event.candidate
-        });
+      if (event.candidate) {
+        try {
+          electronAPI.sendToWS({ type: 'screen-ice-candidate', candidate: event.candidate });
+        } catch (e) {
+          console.error('Error sending ICE candidate:', e);
+        }
       }
     };
 
-    // Create offer
+    // Create offer and send to mobile via signaling (through main)
     const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
 
-    // Send offer to mobile via Socket.IO
-    if (socket && socket.connected) {
-      socket.emit('screen-offer', {
-        offer: offer
-      });
+    // Prefer H264 in the SDP to maximize mobile hardware decoding compatibility
+    function preferCodec(sdp, mime) {
+      try {
+        const sdpLines = sdp.split('\r\n');
+        let mLineIndex = -1;
+        for (let i = 0; i < sdpLines.length; i++) {
+          if (sdpLines[i].startsWith('m=video')) {
+            mLineIndex = i;
+            break;
+          }
+        }
+        if (mLineIndex === -1) return sdp; // no video m-line
+
+        // Find payload types for the codec
+        const codecPayloads = [];
+        const regex = new RegExp('^a=rtpmap:(\\d+) ' + mime + '/','i');
+        for (const line of sdpLines) {
+          const match = line.match(/^a=rtpmap:(\d+) ([^/]+)\/\d+/i);
+          if (match) {
+            const payload = match[1];
+            const codec = match[2];
+            if (codec.toUpperCase() === mime.toUpperCase()) {
+              codecPayloads.push(payload);
+            }
+          }
+        }
+        if (codecPayloads.length === 0) return sdp; // codec not found
+
+        // Reorder the m=video payload list to put codecPayloads first
+        const mLineParts = sdpLines[mLineIndex].split(' ');
+        const header = mLineParts.slice(0, 3); // m=video <port> <proto>
+        const payloads = mLineParts.slice(3);
+        // Move preferred payloads to front in the same order
+        const newPayloads = [];
+        codecPayloads.forEach(p => {
+          const idx = payloads.indexOf(p);
+          if (idx !== -1) {
+            newPayloads.push(p);
+            payloads.splice(idx, 1);
+          }
+        });
+        const finalPayloads = newPayloads.concat(payloads);
+        sdpLines[mLineIndex] = header.concat(finalPayloads).join(' ');
+        return sdpLines.join('\r\n');
+      } catch (e) {
+        console.warn('preferCodec failed:', e);
+        return sdp;
+      }
     }
+
+    const modifiedSdp = preferCodec(offer.sdp || '', 'H264');
+    const modifiedOffer = { type: offer.type, sdp: modifiedSdp };
+    await peerConnection.setLocalDescription(modifiedOffer);
+    try {
+      electronAPI.sendToWS({ type: 'screen-offer', offer: modifiedOffer });
+      console.log('Screen offer (H264 preferred) sent to mobile');
+    } catch (e) {
+      console.error('Error sending screen offer:', e);
+    }
+
+    
 
     // Set up preview
     if (previewEl) {
@@ -540,68 +540,24 @@ async function stopScreenSharing() {
 }
 
 function startSendingFrames() {
-  if (!screenStream || !screenCanvas || !screenCtx) {
-    console.error('Screen capture not set up');
-    return;
-  }
-
-  console.log('Starting to send screen frames via Socket.IO');
-
-  // Send frames at ~15 FPS
-  frameInterval = setInterval(() => {
-    if (isScreenSharing && screenStream && socket && socket.connected) {
-      try {
-        // Draw current frame to canvas
-        const videoTrack = screenStream.getVideoTracks()[0];
-        if (videoTrack && videoTrack.readyState === 'live') {
-          screenCtx.drawImage(previewEl, 0, 0, screenCanvas.width, screenCanvas.height);
-
-          // Convert to JPEG for compression
-          screenCanvas.toBlob((blob) => {
-            if (blob) {
-              // Convert blob to base64 for Socket.IO transmission
-              const reader = new FileReader();
-              reader.onload = () => {
-                const base64Data = reader.result;
-                // Send frame data via Socket.IO
-                socket.emit('screen-frame', {
-                  frame: base64Data,
-                  timestamp: Date.now()
-                });
-              };
-              reader.readAsDataURL(blob);
-            }
-          }, 'image/jpeg', 0.8); // 80% quality
-        }
-      } catch (error) {
-        console.error('Error capturing/sending frame:', error);
-        // If we get persistent errors, we might need to restart capture
-      }
-    }
-  }, 1000 / 15); // 15 FPS
+  // Legacy frame-by-frame socket transfer removed. Use WebRTC instead.
 }
 
-function stopSendingFrames() {
-  if (frameInterval) {
-    clearInterval(frameInterval);
-    frameInterval = null;
-    console.log('Stopped sending screen frames');
-  }
-}
 
-async function getScreenCapture() {
+async function getScreenCapture(sourceId) {
   try {
-    console.log('Getting screen capture...');
+    console.log('Getting screen capture for source:', sourceId);
     const sources = await electronAPI.getScreenSources();
 
     if (!sources || sources.length === 0) {
       throw new Error('No screen sources found');
     }
 
-    const screenSource = sources[0];
+    // Find the selected source by id, or fallback to the first
+    const screenSource = sources.find(s => s.id === sourceId) || sources[0];
     console.log('Using screen source:', screenSource.name);
 
-    // Get screen stream using the main window's webContents
+    // Get screen stream using the selected source id
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
@@ -609,9 +565,9 @@ async function getScreenCapture() {
           chromeMediaSource: 'desktop',
           chromeMediaSourceId: screenSource.id,
           minWidth: 800,
-          maxWidth: 800,
+          maxWidth: 1920,
           minHeight: 600,
-          maxHeight: 600
+          maxHeight: 1080
         }
       }
     });
@@ -663,6 +619,35 @@ async function initCameraCapture() {
   }
 }
 
+// Populate the screen source selector in the UI
+async function populateScreenSources() {
+  try {
+    const sources = await electronAPI.getScreenSources();
+    if (!screenSelectEl) return;
+    screenSelectEl.innerHTML = '';
+    if (!sources || sources.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No screen sources found';
+      screenSelectEl.appendChild(opt);
+      if (selectScreenBtn) selectScreenBtn.disabled = true;
+      return;
+    }
+
+    sources.forEach((s) => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name || s.id;
+      screenSelectEl.appendChild(opt);
+    });
+    if (selectScreenBtn) selectScreenBtn.disabled = false;
+  } catch (err) {
+    console.error('Error populating screen sources:', err);
+    if (screenSelectEl) screenSelectEl.innerHTML = '<option value="">Unable to fetch sources</option>';
+    if (selectScreenBtn) selectScreenBtn.disabled = true;
+  }
+}
+
 function initSocket() {
   socket = io('http://localhost:8080');
 
@@ -687,58 +672,62 @@ function initSocket() {
   });
 
   // Handle screen sharing answer from mobile
+  // Handle screen sharing answer from mobile (via Socket.IO)
   socket.on('screen-answer', async (data) => {
-    console.log('Received screen answer from mobile');
+    console.log('Received screen answer from mobile (socket)');
     try {
-      if (peerConnection) {
+      if (peerConnection && data && data.answer) {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-        console.log('Remote description set successfully');
+        console.log('Remote description set successfully (socket)');
       }
     } catch (error) {
-      console.error('Error setting remote description:', error);
+      console.error('Error setting remote description (socket):', error);
     }
   });
+
+  // Also handle answers forwarded by the main process via IPC (in case signaling used ipc)
+  if (electronAPI && electronAPI.onScreenAnswer) {
+    electronAPI.onScreenAnswer(async (event, data) => {
+      console.log('Received screen answer from mobile (ipc)');
+      try {
+        if (peerConnection && data && data.answer) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+          console.log('Remote description set successfully (ipc)');
+        }
+      } catch (error) {
+        console.error('Error setting remote description (ipc):', error);
+      }
+    });
+  }
 
   // Handle ICE candidates from mobile
   socket.on('mobile-ice-candidate', async (data) => {
-    console.log('Received ICE candidate from mobile');
+    console.log('Received ICE candidate from mobile (socket)');
     try {
-      if (peerConnection && data.candidate) {
+      if (peerConnection && data && data.candidate) {
         await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
       }
     } catch (error) {
-      console.error('Error adding ICE candidate:', error);
+      console.error('Error adding ICE candidate (socket):', error);
     }
   });
-}
 
-async function startLivestream() {
-  if (!rtmpUrlEl) return;
-  const rtmpUrl = rtmpUrlEl.value.trim();
-  if (!rtmpUrl) {
-    alert('Please enter RTMP URL');
-    return;
-  }
-
-  try {
-    if (!screenStream) {
-      screenStream = await getScreenCapture();
-    }
-
-    // Send to main process to start FFmpeg livestream (RTMP + HLS)
-    const res = await electronAPI.startLivestream(rtmpUrl);
-    if (!res || !res.success) {
-      throw new Error(res && res.error ? res.error : 'Unknown error starting livestream');
-    }
-    isLivestreaming = true;
-    if (statusEl) statusEl.textContent = 'Livestreaming started';
-    updateButtons();
-
-  } catch (error) {
-    console.error('Error starting livestream:', error);
-    if (statusEl) statusEl.textContent = 'Livestream error: ' + error.message;
+  // Also listen for candidates forwarded by main process via IPC
+  if (electronAPI && electronAPI.onMobileIceCandidate) {
+    electronAPI.onMobileIceCandidate(async (event, data) => {
+      console.log('Received ICE candidate from mobile (ipc)');
+      try {
+        if (peerConnection && data && data.candidate) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        }
+      } catch (error) {
+        console.error('Error adding ICE candidate (ipc):', error);
+      }
+    });
   }
 }
+
+// startLivestream removed: RTMP/FFmpeg/MediaRecorder flows are no longer supported.
 
 // function updateButtons() {
 //   // Update button states based on streaming status
@@ -870,19 +859,12 @@ async function stopWebRTCStreaming() {
   updateButtons();
 }
 
-async function stopLivestream() {
-  await electronAPI.stopLivestream();
-  isLivestreaming = false;
-  statusEl.textContent = 'Livestreaming stopped';
-  updateButtons();
-}
-
 function updateButtons() {
-  if (startLivestreamBtn) {
-    startLivestreamBtn.disabled = isLivestreaming;
-    startLivestreamBtn.textContent = isLivestreaming ? '▶️ Livestreaming...' : '▶️ Start Livestream';
+  // Update UI for screen selection/start/stop
+  if (selectScreenBtn) {
+    selectScreenBtn.disabled = isScreenSharing;
   }
-  if (stopLivestreamBtn) {
-    stopLivestreamBtn.disabled = !isLivestreaming;
+  if (stopScreenBtn) {
+    stopScreenBtn.disabled = !isScreenSharing;
   }
 }

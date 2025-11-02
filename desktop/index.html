@@ -690,13 +690,16 @@
               <h3 class="card-title">Stream Controls</h3>
             </div>
             <div class="control-group">
-              <input type="text" id="rtmp-url" class="rtmp-input" placeholder="rtmp://youtube.com/live/YOUR_STREAM_KEY">
-              <div class="control-buttons">
-                <button id="start-livestream" class="btn btn-primary" disabled>
-                  <span>▶️</span> Start
+              <label for="screen-source-select" style="display:block; margin-bottom:8px; color:#ccc;">Select screen/window to share</label>
+              <select id="screen-source-select" class="select-input">
+                <option value="">Loading sources...</option>
+              </select>
+              <div class="control-buttons" style="margin-top:8px;">
+                <button id="select-screen-btn" class="btn btn-primary">
+                  <span>📤</span> Start Sharing
                 </button>
-                <button id="stop-livestream" class="btn btn-secondary" disabled>
-                  <span>⏹️</span> Stop
+                <button id="stop-screen-btn" class="btn btn-secondary" disabled>
+                  <span>⏹️</span> Stop Sharing
                 </button>
               </div>
             </div>

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:flutter_vlc_player/flutter_vlc_player.dart';
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
@@ -56,9 +55,6 @@ class _MobileHomePageState extends State<MobileHomePage> {
   RTCPeerConnection? peerConnection;
   RTCVideoRenderer screenRenderer = RTCVideoRenderer();
   bool isScreenSharingActive = false;
-  // HLS/RTMP playback controller (for low-latency local playback via HLS)
-  VlcPlayerController? _vlcController;
-  bool isHlsPlaying = false;
   MemoryImage? screenImage;
 
   io.Socket? socket;
@@ -216,58 +212,7 @@ class _MobileHomePageState extends State<MobileHomePage> {
         }
       });
 
-      socket!.on('screen-sharing-started', (_) {
-        setState(() {
-          isStreaming = true;
-          isConnecting = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Screen sharing started!')),
-        );
-        // Auto-play HLS stream served by desktop at http://<desktop-ip>:8081/hls/stream.m3u8
-        try {
-          final ip = ipController.text.trim().isNotEmpty ? ipController.text.trim() : desktopIP;
-          final hlsUrl = 'http://$ip:8081/hls/stream.m3u8';
-          // Start VLC player
-          _vlcController?.stop();
-          _vlcController?.dispose();
-          // Try to explicitly request full hardware acceleration if the enum is available
-          // Note: some versions of flutter_vlc_player expose enum values in lowercase (e.g. HwAcc.full)
-          // while others use uppercase. We choose the lowercase form which is the most common Dart style.
-          try {
-            _vlcController = VlcPlayerController.network(
-              hlsUrl,
-              hwAcc: HwAcc.full,
-              autoPlay: true,
-            );
-          } catch (e) {
-            // Fallback to default if the enum member isn't available in this plugin version
-            _vlcController = VlcPlayerController.network(
-              hlsUrl,
-              autoPlay: true,
-            );
-          }
-          setState(() {
-            isHlsPlaying = true;
-          });
-        } catch (e) {
-          print('Error starting HLS playback: $e');
-        }
-      });
-
-      socket!.on('screen-sharing-stopped', (_) {
-        setState(() {
-          isStreaming = false;
-        });
-        // Stop HLS playback
-        try {
-          _vlcController?.stop();
-          _vlcController?.dispose();
-          _vlcController = null;
-        } catch (e) {
-          print('Error stopping HLS playback: $e');
-        }
-      });
+      // HLS/RTMP playback removed - mobile uses native WebRTC (flutter_webrtc) to receive desktop screen
 
       socket!.on('screen-sharing-error', (error) {
         print('Screen sharing error: $error');
@@ -360,13 +305,36 @@ class _MobileHomePageState extends State<MobileHomePage> {
       print('ICE connection state: $state');
     };
 
-    peerConnection!.onTrack = (event) {
+    peerConnection!.onTrack = (event) async {
       print('Received remote track');
       if (event.track.kind == 'video') {
-        screenRenderer.srcObject = event.streams[0];
-        setState(() {
-          isScreenSharingActive = true;
-        });
+        try {
+          // Ensure the renderer is initialized and not disposed
+          if (screenRenderer != null) {
+            // Attempt to set srcObject; if renderer was disposed, reinitialize first
+            try {
+              screenRenderer.srcObject = event.streams[0];
+            } catch (e) {
+              print('Renderer set failed, attempting reinitialize: $e');
+              try {
+                await screenRenderer.initialize();
+                screenRenderer.srcObject = event.streams[0];
+              } catch (e2) {
+                print('Failed to reinitialize renderer: $e2');
+              }
+            }
+          } else {
+            screenRenderer = RTCVideoRenderer();
+            await screenRenderer.initialize();
+            screenRenderer.srcObject = event.streams[0];
+          }
+
+          setState(() {
+            isScreenSharingActive = true;
+          });
+        } catch (err) {
+          print('Error attaching remote track to renderer: $err');
+        }
       }
     };
 
@@ -384,8 +352,12 @@ class _MobileHomePageState extends State<MobileHomePage> {
       peerConnection!.close();
       peerConnection = null;
     }
-    screenRenderer.srcObject = null;
-    screenRenderer.dispose();
+    // Clear the renderer's srcObject but keep the renderer initialized for reuse
+    try {
+      screenRenderer.srcObject = null;
+    } catch (e) {
+      print('Error clearing screenRenderer srcObject: $e');
+    }
   }
 
 
@@ -451,7 +423,17 @@ class _MobileHomePageState extends State<MobileHomePage> {
 
     // Clean up WebRTC connection
     peerConnection?.close();
-    screenRenderer?.dispose();
+    try {
+      screenRenderer?.srcObject = null;
+    } catch (e) {
+      print('Error clearing renderer srcObject on disconnect: $e');
+    }
+    // Dispose renderer explicitly when fully disconnecting
+    try {
+      screenRenderer.dispose();
+    } catch (e) {
+      print('Error disposing screenRenderer: $e');
+    }
 
     setState(() {
       isConnected = false;
@@ -470,6 +452,11 @@ class _MobileHomePageState extends State<MobileHomePage> {
     chatTimer?.cancel();
     ipController.dispose();
     pairingCodeController.dispose();
+    try {
+      screenRenderer.dispose();
+    } catch (e) {
+      print('Error disposing screenRenderer in dispose(): $e');
+    }
     super.dispose();
   }
 
@@ -622,14 +609,8 @@ class _MobileHomePageState extends State<MobileHomePage> {
               borderRadius: BorderRadius.circular(14),
               child: Stack(
                 children: [
-                  // Screen preview from WebRTC stream OR HLS playback via VLC
-                  if (isHlsPlaying && _vlcController != null)
-                    VlcPlayer(
-                      controller: _vlcController!,
-                      aspectRatio: 16 / 9,
-                      placeholder: const Center(child: CircularProgressIndicator()),
-                    )
-                  else if (isScreenSharingActive && screenRenderer.srcObject != null)
+                  // Screen preview from WebRTC stream
+                  if (isScreenSharingActive && screenRenderer.srcObject != null)
                     RTCVideoView(screenRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain)
                   else
                     Center(
