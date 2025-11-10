@@ -1,0 +1,77 @@
+{
+  "name": "sonic-broadcast-desktop",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist-electron/main/main.js",
+  "scripts": {
+    "dev": "vite",
+    "electron-dev": "vite",
+    "lint": "eslint .",
+    "typecheck": "tsc -b",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "start": "electron .",
+    "package": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@daily-co/daily-js": "^0.85.0",
+    "@daily-co/daily-react": "^0.24.0",
+    "@types/styled-components": "^5.1.35",
+    
+    "electron": "^39.1.1",
+    "express": "^5.1.0",
+    "nanoid": "^5.1.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "styled-components": "^6.1.19",
+    "utf-8-validate": "^6.0.5",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "babel-plugin-react-compiler": "^19.1.0-rc.3",
+    "bufferutil": "^4.0.9",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.3",
+    "vite": "^7.2.2",
+    "vite-plugin-electron": "^0.29.0"
+  },
+  "build": {
+    "appId": "com.sonic.broadcast.desktop",
+    "productName": "Sonic Broadcast Desktop",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "AudioVideo"
+    }
+  }
+}
