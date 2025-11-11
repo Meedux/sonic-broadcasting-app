@@ -3,6 +3,7 @@ import express from 'express'
 import http from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { Server as SocketIOServer } from 'socket.io'
+import QRCode from 'qrcode'
 
 export interface CommunicationState {
   port: number
@@ -140,14 +141,39 @@ export async function createCommunicationServer(): Promise<CommunicationServer> 
     res.json({ status: 'ok' })
   })
 
+  app.get('/pairing/qr.png', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    const url = (req.query.url as string) || ''
+    if (!url) {
+      res.status(400).send('Missing url')
+      return
+    }
+    try {
+      const png = await QRCode.toBuffer(url, { type: 'png', margin: 1, width: 256, color: { dark: '#000000', light: '#ffffff' } })
+      res.setHeader('Content-Type', 'image/png')
+      res.send(png)
+    } catch {
+      res.status(500).send('Failed to generate QR')
+    }
+  })
+
   const httpServer = http.createServer(app)
   const io = new SocketIOServer(httpServer, {
     path: SOCKET_PATH,
     cors: { origin: '*' },
   })
 
+  // In-memory stream configuration shared with mobile controllers
+  let currentStreamConfig: Record<string, unknown> | null = null
+
   io.on('connection', (socket) => {
     socket.emit('status', { state: 'connected' })
+    // Push current stream config to newly connected client
+    if (currentStreamConfig) {
+      socket.emit('stream-config', currentStreamConfig)
+    }
+    // Optionally prompt clients to join right away
+    socket.emit('join-now', {})
   })
 
   const dailyApiKey = process.env.DAILY_API_KEY || process.env.VITE_DAILY_API_KEY || DEFAULT_DAILY_API_KEY
@@ -174,6 +200,36 @@ export async function createCommunicationServer(): Promise<CommunicationServer> 
       console.error('Daily session provisioning failed:', message)
       res.status(502).json({ error: message })
     }
+  })
+
+  // Basic endpoints to set and broadcast stream configuration and commands
+  app.get('/stream/config', (_req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.json(currentStreamConfig ?? {})
+  })
+
+  app.post('/stream/config', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    const { rtmpEndpoint, facebookKey, youtubeKey } = req.body ?? {}
+    currentStreamConfig = {
+      ...(rtmpEndpoint ? { rtmpEndpoint } : {}),
+      ...(facebookKey ? { facebookKey } : {}),
+      ...(youtubeKey ? { youtubeKey } : {}),
+      updatedAt: Date.now(),
+    }
+    io.emit('stream-config', currentStreamConfig)
+    res.json({ ok: true })
+  })
+
+  app.post('/command', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    const { type, payload } = req.body ?? {}
+    if (!type || typeof type !== 'string') {
+      res.status(400).json({ error: 'Command type is required' })
+      return
+    }
+    io.emit('command', { type, payload })
+    res.json({ ok: true })
   })
 
   let port: number | undefined

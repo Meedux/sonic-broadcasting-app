@@ -73,6 +73,8 @@ export const BroadcastApp = () => {
 
   const isScreenShareActive = derivedScreenStatus === 'sharing'
   const isLivestreamActive = derivedLiveStatus === 'live'
+  const primaryLanUrl = pairingAddresses[0]
+  const qrUrl = primaryLanUrl ? `${primaryLanUrl}/pairing/qr.png?url=${encodeURIComponent(primaryLanUrl)}` : null
 
   return (
     <AppShell>
@@ -224,6 +226,13 @@ export const BroadcastApp = () => {
                   ))}
                   {!pairingAddresses.length && !commsError && <EmptyState>LAN details unavailable yet</EmptyState>}
                 </PairingList>
+                {qrUrl && (
+                  <QrBlock>
+                    <QrLabel>Mobile Pairing QR</QrLabel>
+                    <QrImage src={qrUrl} alt="Pairing QR" />
+                    <QrHint>Scan with Sonic Mobile to auto-fill base URL.</QrHint>
+                  </QrBlock>
+                )}
               </Panel>
 
               <Panel>
@@ -753,9 +762,42 @@ const PairingLabel = styled.span`
 `
 
 const PairingValue = styled.span`
-  font-family: ${({ theme }) => theme.fonts.mono};
   font-size: 0.85rem;
   color: ${({ theme }) => theme.colors.textPrimary};
+  word-break: break-all;
+`
+
+const QrBlock = styled.div`
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  background: ${({ theme }) => theme.colors.backgroundRaised};
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 12px;
+  padding: 16px;
+`
+
+const QrLabel = styled.span`
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: ${({ theme }) => theme.colors.textSecondary};
+`
+
+const QrImage = styled.img`
+  width: 180px;
+  height: 180px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+`
+
+const QrHint = styled.span`
+  font-size: 0.7rem;
+  color: ${({ theme }) => theme.colors.textMuted};
+  text-align: center;
 `
 
 export default BroadcastApp
