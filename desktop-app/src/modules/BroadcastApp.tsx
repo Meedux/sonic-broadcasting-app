@@ -79,7 +79,7 @@ export const BroadcastApp = () => {
   return (
     <AppShell>
       <HiddenAudio>
-        <DailyAudio autoSubscribeActiveSpeaker playLocalScreenAudio />
+        <DailyAudio autoSubscribeActiveSpeaker playLocalScreenAudio={!isPreviewMuted} />
       </HiddenAudio>
       <Header>
         <div>
@@ -104,7 +104,6 @@ export const BroadcastApp = () => {
 
       <Body>
         <Sidebar>
-          
 
           <Panel>
             <PanelHeading>Livestream Settings</PanelHeading>

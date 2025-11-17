@@ -157,6 +157,32 @@ export function useDailyController(options: UseDailyControllerOptions = {}) {
 
     setDailyStatus('joining')
     try {
+      // Wait for the underlying call object to finish its initial load to avoid
+      // benign signaling race warnings (e.g., "sigChannel serverTSNow ...").
+      try {
+        const state = daily.meetingState?.()
+        if (state === 'new' || state === 'loading') {
+          await new Promise<void>((resolve) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const onLoaded: any = () => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              daily.off?.('loaded' as any, onLoaded)
+              resolve()
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            daily.on?.('loaded' as any, onLoaded)
+            // Fallback: continue after a short delay even if 'loaded' doesn't fire in time
+            setTimeout(() => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              daily.off?.('loaded' as any, onLoaded)
+              resolve()
+            }, 300)
+          })
+        }
+      } catch {
+        // ignore – this is a best-effort guard
+      }
+
       await daily.join({
         url: roomUrl,
         token: token || undefined,

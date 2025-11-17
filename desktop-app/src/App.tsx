@@ -11,6 +11,12 @@ let callObjectSingleton: DailyCall | null = null
 
 const getCallObject = (): DailyCall => {
   if (!callObjectSingleton && typeof DailyIframe.createCallObject === 'function') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (DailyIframe as any)?.setLogLevel?.('error')
+    } catch {
+      /* ignore: log level API not available in this SDK version */
+    }
     callObjectSingleton = DailyIframe.createCallObject()
     if (typeof callObjectSingleton?.on === 'function') {
       callObjectSingleton.on('call-instance-destroyed', () => {

@@ -174,6 +174,22 @@ export async function createCommunicationServer(): Promise<CommunicationServer> 
     }
     // Optionally prompt clients to join right away
     socket.emit('join-now', {})
+    // If Daily manager is available, ensure a session and push it to the newly connected client
+    if (dailyManager) {
+      dailyManager
+        .ensureSession()
+        .then((session) => {
+          socket.emit('daily-session', {
+            roomName: session.roomName,
+            roomUrl: session.roomUrl,
+            token: session.token,
+            expiresAt: session.expiresAt,
+          })
+        })
+        .catch((err) => {
+          console.warn('Failed to provision Daily session for new socket:', err)
+        })
+    }
   })
 
   const dailyApiKey = process.env.DAILY_API_KEY || process.env.VITE_DAILY_API_KEY || DEFAULT_DAILY_API_KEY
@@ -194,6 +210,14 @@ export async function createCommunicationServer(): Promise<CommunicationServer> 
         roomUrl: session.roomUrl,
         token: session.token,
         expiresAt: session.expiresAt,
+      })
+      // Broadcast the session to all connected controllers so they can auto-join
+      io.emit('daily-session', {
+        roomName: session.roomName,
+        roomUrl: session.roomUrl,
+        token: session.token,
+        expiresAt: session.expiresAt,
+        refreshed: !!force,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to prepare Daily session'
@@ -317,6 +341,12 @@ function collectLanAddresses(): string[] {
       addresses.add(iface.address)
     })
   })
+
+  // Helpful aliases for Android emulators:
+  // Standard Android emulator maps host loopback to 10.0.2.2, some variants (Genymotion) use 10.0.3.2.
+  // We always add them so the UI can display a directly usable address for emulator testing.
+  addresses.add('10.0.2.2')
+  addresses.add('10.0.3.2')
 
   return Array.from(addresses)
 }

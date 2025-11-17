@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#0C0C0F</color>
+    <color name="sonic_primary">#C0162B</color>
+    <color name="sonic_surface">#15151A</color>
+    <color name="sonic_on_surface">#9A9AA0</color>
+</resources>
