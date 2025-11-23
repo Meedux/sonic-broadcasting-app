@@ -4,7 +4,7 @@ import type { MediaStreamTrack } from '@daily-co/react-native-webrtc'
 import type { Socket } from 'socket.io-client'
 
 import { createDailyRoom, type DailyRoom } from '@/src/services/daily'
-import { createDesktopSocket, linkSession, normalizeLanUrl } from '@/src/services/desktop'
+import { createDesktopSocket, linkSession, normalizeLanUrl, shareMobileParticipant } from '@/src/services/desktop'
 
 export type BroadcastStage =
   | 'idle'
@@ -23,11 +23,17 @@ export interface BroadcastContextValue {
   desktopParticipantId: string | null
   remoteScreenTrack: MediaStreamTrack | null
   remoteAudioTrack: MediaStreamTrack | null
+  localCameraTrack: MediaStreamTrack | null
   errorMessage: string | null
   callObject: DailyCall | null
   createRoom: () => Promise<void>
   connectDesktop: (lanUrl: string) => Promise<void>
   readyForPreview: boolean
+  cameraEnabled: boolean
+  cameraBusy: boolean
+  cameraPosition: 'top' | 'bottom'
+  setCameraEnabled: (next: boolean) => Promise<void>
+  setCameraPosition: (position: 'top' | 'bottom') => void
 }
 
 const BroadcastContext = createContext<BroadcastContextValue | undefined>(undefined)
@@ -39,8 +45,13 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
   const [desktopParticipantId, setDesktopParticipantId] = useState<string | null>(null)
   const [remoteScreenTrack, setRemoteScreenTrack] = useState<MediaStreamTrack | null>(null)
   const [remoteAudioTrack, setRemoteAudioTrack] = useState<MediaStreamTrack | null>(null)
+  const [localCameraTrack, setLocalCameraTrack] = useState<MediaStreamTrack | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [callObject, setCallObject] = useState<DailyCall | null>(null)
+  const [cameraEnabled, setCameraEnabledState] = useState(false)
+  const [cameraBusy, setCameraBusy] = useState(false)
+  const [cameraPosition, setCameraPositionState] = useState<'top' | 'bottom'>('top')
+  const [localParticipantId, setLocalParticipantId] = useState<string | null>(null)
 
   const callRef = useRef<DailyCall | null>(null)
   const socketRef = useRef<Socket | null>(null)
@@ -62,19 +73,39 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
 
   const updateRemoteTracks = useCallback(() => {
     const call = callRef.current
-    if (!call || !desktopParticipantId) {
+    if (!call) {
+      setRemoteScreenTrack(null)
+      setRemoteAudioTrack(null)
+      setLocalCameraTrack(null)
+      setLocalParticipantId(null)
+      setStage((prev) => (prev === 'preview-ready' ? 'connected' : prev))
+      return
+    }
+
+    const participants = call.participants?.() ?? {}
+    const local = participants.local
+    const nextLocalCamera = local?.tracks?.video?.state === 'playable' ? local.tracks.video.track : null
+    setLocalCameraTrack(nextLocalCamera ?? null)
+    if (local?.session_id && localParticipantId !== local.session_id) {
+      setLocalParticipantId(local.session_id)
+    } else if (!local?.session_id && localParticipantId) {
+      setLocalParticipantId(null)
+    }
+
+    if (!desktopParticipantId) {
       setRemoteScreenTrack(null)
       setRemoteAudioTrack(null)
       setStage((prev) => (prev === 'preview-ready' ? 'connected' : prev))
       return
     }
-    const participant = call.participants?.()?.[desktopParticipantId]
+
+    const participant = participants?.[desktopParticipantId]
     const nextScreen = participant?.tracks?.screenVideo?.state === 'playable' ? participant.tracks.screenVideo.track : null
     const nextAudio = participant?.tracks?.screenAudio?.state === 'playable' ? participant.tracks.screenAudio.track : null
     setRemoteScreenTrack(nextScreen ?? null)
     setRemoteAudioTrack(nextAudio ?? null)
     setStage((prev) => (nextScreen ? 'preview-ready' : prev === 'preview-ready' ? 'connected' : prev))
-  }, [desktopParticipantId])
+  }, [desktopParticipantId, localParticipantId])
 
   useEffect(() => {
     const call = callRef.current
@@ -154,6 +185,7 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
       })
       call.setLocalAudio(false)
       call.setLocalVideo(false)
+      setCameraEnabledState(false)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to join session room'
       setErrorMessage(message)
@@ -183,6 +215,35 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
     },
     [],
   )
+
+  const toggleCamera = useCallback(
+    async (next: boolean) => {
+      if (cameraEnabled === next) {
+        return
+      }
+      const call = callRef.current
+      if (!call) {
+        throw new Error('Session bridge not ready')
+      }
+      setCameraBusy(true)
+      setErrorMessage(null)
+      try {
+        await call.setLocalVideo(next)
+        setCameraEnabledState(next)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to toggle the mobile camera'
+        setErrorMessage(message)
+        throw error
+      } finally {
+        setCameraBusy(false)
+      }
+    },
+    [cameraEnabled],
+  )
+
+  const updateCameraPosition = useCallback((position: 'top' | 'bottom') => {
+    setCameraPositionState(position)
+  }, [])
 
   const attachSocket = useCallback(
     (baseUrl: string, activeRoom: DailyRoom) =>
@@ -243,6 +304,26 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
     void subscribeToScreenshare(desktopParticipantId)
   }, [desktopParticipantId, subscribeToScreenshare])
 
+  useEffect(() => {
+    if (!lanUrl) {
+      return
+    }
+    const payload = {
+      participantId: localParticipantId,
+      cameraEnabled: cameraEnabled && Boolean(localParticipantId),
+      cameraPosition,
+    }
+    shareMobileParticipant(lanUrl, payload).catch((error) => {
+      console.warn('Failed to sync mobile participant state', error)
+    })
+  }, [lanUrl, localParticipantId, cameraEnabled, cameraPosition])
+
+  useEffect(() => {
+    if (!localParticipantId && cameraEnabled) {
+      setCameraEnabledState(false)
+    }
+  }, [localParticipantId, cameraEnabled])
+
   const connectDesktop = useCallback(
     async (rawLanUrl: string) => {
       if (!room) {
@@ -274,11 +355,17 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
       desktopParticipantId,
       remoteScreenTrack,
       remoteAudioTrack,
+      localCameraTrack,
       errorMessage,
       callObject,
       createRoom: createRoomHandler,
       connectDesktop,
       readyForPreview: stage === 'preview-ready' && Boolean(remoteScreenTrack),
+      cameraEnabled,
+      cameraBusy,
+      cameraPosition,
+      setCameraEnabled: toggleCamera,
+      setCameraPosition: updateCameraPosition,
     }),
     [
       callObject,
@@ -287,9 +374,15 @@ export const BroadcastProvider = ({ children }: { children: ReactNode }) => {
       desktopParticipantId,
       errorMessage,
       lanUrl,
+      localCameraTrack,
       remoteAudioTrack,
       remoteScreenTrack,
       room,
+      cameraEnabled,
+      cameraBusy,
+      cameraPosition,
+      toggleCamera,
+      updateCameraPosition,
       stage,
     ],
   )

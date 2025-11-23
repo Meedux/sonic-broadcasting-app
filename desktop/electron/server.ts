@@ -20,6 +20,9 @@ export interface CommunicationState {
   lanAddresses: string[]
   linkedSession: LinkedSession | null
   desktopParticipantId: string | null
+  mobileParticipantId: string | null
+  mobileCameraEnabled: boolean
+  mobileCameraPosition: 'top' | 'bottom'
 }
 
 type CommunicationServerOptions = {
@@ -68,6 +71,9 @@ export async function createCommunicationServer(options: CommunicationServerOpti
 
   let linkedSession: LinkedSession | null = null
   let desktopParticipantId: string | null = null
+  let mobileParticipantId: string | null = null
+  let mobileCameraEnabled = false
+  let mobileCameraPosition: 'top' | 'bottom' = 'top'
 
   const broadcastLinkedSession = (session: LinkedSession, meta?: Record<string, unknown>) => {
     io.emit('daily-session', {
@@ -76,6 +82,14 @@ export async function createCommunicationServer(options: CommunicationServerOpti
       token: session.token,
       linkedAt: session.linkedAt,
       ...(meta ?? {}),
+    })
+  }
+
+  const emitMobileParticipant = () => {
+    io.emit('mobile-participant', {
+      participantId: mobileParticipantId,
+      cameraEnabled: mobileCameraEnabled,
+      cameraPosition: mobileCameraPosition,
     })
   }
 
@@ -100,6 +114,9 @@ export async function createCommunicationServer(options: CommunicationServerOpti
 
     linkedSession = normalized
     desktopParticipantId = null
+    mobileParticipantId = null
+    mobileCameraEnabled = false
+    mobileCameraPosition = 'top'
     broadcastLinkedSession(normalized, { active: true })
     notifyStateChange()
     return { ok: true, session: normalized }
@@ -108,7 +125,54 @@ export async function createCommunicationServer(options: CommunicationServerOpti
   const clearLinkedSession = () => {
     linkedSession = null
     desktopParticipantId = null
+    mobileParticipantId = null
+    mobileCameraEnabled = false
+    mobileCameraPosition = 'top'
     notifyStateChange()
+  }
+
+  const updateMobileParticipant = (payload: {
+    participantId?: unknown
+    cameraEnabled?: unknown
+    cameraPosition?: unknown
+  }) => {
+    let changed = false
+
+    if (payload.participantId !== undefined) {
+      const normalizedId =
+        typeof payload.participantId === 'string' && payload.participantId.trim().length
+          ? payload.participantId.trim()
+          : null
+      if (mobileParticipantId !== normalizedId) {
+        mobileParticipantId = normalizedId
+        if (!mobileParticipantId) {
+          mobileCameraEnabled = false
+        }
+        changed = true
+      }
+    }
+
+    if (typeof payload.cameraEnabled === 'boolean') {
+      if (mobileCameraEnabled !== payload.cameraEnabled) {
+        mobileCameraEnabled = payload.cameraEnabled
+        changed = true
+      }
+    } else if (!mobileParticipantId && mobileCameraEnabled) {
+      mobileCameraEnabled = false
+      changed = true
+    }
+
+    if (payload.cameraPosition === 'bottom' || payload.cameraPosition === 'top') {
+      if (mobileCameraPosition !== payload.cameraPosition) {
+        mobileCameraPosition = payload.cameraPosition
+        changed = true
+      }
+    }
+
+    if (changed) {
+      emitMobileParticipant()
+      notifyStateChange()
+    }
   }
 
   // In-memory stream configuration shared with mobile controllers
@@ -132,12 +196,19 @@ export async function createCommunicationServer(options: CommunicationServerOpti
     if (desktopParticipantId) {
       socket.emit('desktop-participant', { participantId: desktopParticipantId })
     }
+    if (mobileParticipantId || mobileCameraEnabled) {
+      emitMobileParticipant()
+    }
 
     socket.on('mobile-link-session', (payload) => {
       const result = applyLinkedSessionPayload(payload ?? {})
       if ('error' in result) {
         socket.emit('mobile-link-error', result)
       }
+    })
+
+    socket.on('mobile-participant', (payload) => {
+      updateMobileParticipant(payload ?? {})
     })
   })
 
@@ -172,6 +243,12 @@ export async function createCommunicationServer(options: CommunicationServerOpti
     desktopParticipantId = rawParticipantId || null
     io.emit('desktop-participant', { participantId: desktopParticipantId })
     notifyStateChange()
+    res.json({ ok: true })
+  })
+
+  app.post('/link/mobile', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    updateMobileParticipant(req.body ?? {})
     res.json({ ok: true })
   })
 
@@ -222,6 +299,9 @@ export async function createCommunicationServer(options: CommunicationServerOpti
         : [],
       linkedSession,
       desktopParticipantId,
+      mobileParticipantId,
+      mobileCameraEnabled,
+      mobileCameraPosition,
     }
   }
 

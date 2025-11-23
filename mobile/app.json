@@ -20,7 +20,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.medux.mobile"
+      "package": "com.medux.mobile",
+      "permissions": ["CAMERA", "RECORD_AUDIO"]
     },
     "web": {
       "output": "static",

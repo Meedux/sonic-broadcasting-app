@@ -37,6 +37,9 @@ export interface BroadcastConfig {
   linkedAt: number | null
   selfParticipantId: string
   desktopParticipantId: string
+  mobileParticipantId: string
+  mobileCameraEnabled: boolean
+  cameraOverlayPosition: 'top' | 'bottom'
   selectedSourceId?: string
   isPreviewMuted: boolean
   livestream: LivestreamConfig
@@ -54,6 +57,9 @@ export interface BroadcastStoreState extends BroadcastConfig {
   setLinkedAt: (linkedAt: number | null) => void
   setSelfParticipantId: (id: string) => void
   setDesktopParticipantId: (id: string) => void
+  setMobileParticipantId: (id: string) => void
+  setMobileCameraEnabled: (enabled: boolean) => void
+  setCameraOverlayPosition: (position: 'top' | 'bottom') => void
   setDailyStatus: (status: DailyConnectionStatus) => void
   setScreenShareStatus: (status: ScreenShareStatus) => void
   setLivestreamStatus: (status: LivestreamStatus) => void
@@ -78,6 +84,9 @@ export const useBroadcastStore = create<BroadcastStoreState>((set) => ({
   linkedAt: null,
   selfParticipantId: '',
   desktopParticipantId: '',
+  mobileParticipantId: '',
+  mobileCameraEnabled: false,
+  cameraOverlayPosition: 'top',
   selectedSourceId: undefined,
   isPreviewMuted: true,
   dailyStatus: 'idle',
@@ -112,6 +121,9 @@ export const useBroadcastStore = create<BroadcastStoreState>((set) => ({
   setLinkedAt: (linkedAt) => set({ linkedAt }),
   setSelfParticipantId: (selfParticipantId) => set({ selfParticipantId }),
   setDesktopParticipantId: (desktopParticipantId) => set({ desktopParticipantId }),
+  setMobileParticipantId: (mobileParticipantId) => set({ mobileParticipantId }),
+  setMobileCameraEnabled: (mobileCameraEnabled) => set({ mobileCameraEnabled }),
+  setCameraOverlayPosition: (cameraOverlayPosition) => set({ cameraOverlayPosition }),
   setDailyStatus: (dailyStatus) => set({ dailyStatus }),
   setScreenShareStatus: (screenShareStatus) => set({ screenShareStatus }),
   setLivestreamStatus: (livestreamStatus) => set({ livestreamStatus }),

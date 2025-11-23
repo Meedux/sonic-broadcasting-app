@@ -41,6 +41,7 @@ export function useDailyController(options: UseDailyControllerOptions = {}) {
   const dailyStatus = useBroadcastStore((state) => state.dailyStatus)
   const screenShareStatus = useBroadcastStore((state) => state.screenShareStatus)
   const livestreamStatus = useBroadcastStore((state) => state.livestreamStatus)
+  const mobileParticipantId = useBroadcastStore((state) => state.mobileParticipantId)
 
   const addLog = useBroadcastStore((state) => state.addLog)
   const setSelfParticipantId = useBroadcastStore((state) => state.setSelfParticipantId)
@@ -157,7 +158,7 @@ export function useDailyController(options: UseDailyControllerOptions = {}) {
 
       const joinOptions: Parameters<NonNullable<typeof daily>['join']>[0] = {
         url: roomUrl,
-        subscribeToTracksAutomatically: true,
+        subscribeToTracksAutomatically: false,
       }
       console.log('Joining session with options:', joinOptions)
       const trimmedToken = typeof token === 'string' ? token.trim() : ''
@@ -417,6 +418,27 @@ export function useDailyController(options: UseDailyControllerOptions = {}) {
       }
     })()
   }, [daily, roomUrl, dailyStatus, isJoined, joinRoom])
+
+  useEffect(() => {
+    if (!daily || !mobileParticipantId) {
+      return
+    }
+    const ensureCameraSubscribed = async () => {
+      try {
+        await daily.updateParticipant(mobileParticipantId, {
+          setSubscribedTracks: {
+            video: true,
+            audio: false,
+            screenVideo: true,
+            screenAudio: false,
+          },
+        })
+      } catch (error) {
+        addLog('warning', `Failed to subscribe to mobile camera: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      }
+    }
+    void ensureCameraSubscribed()
+  }, [daily, mobileParticipantId, addLog])
 
   const hasJoinableRoom = useMemo(() => Boolean(roomUrl), [roomUrl])
   const isReadyToJoin = useMemo(

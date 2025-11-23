@@ -17,6 +17,9 @@ export const BroadcastApp = () => {
     isPreviewMuted,
     linkedAt,
     desktopParticipantId,
+    mobileParticipantId,
+    mobileCameraEnabled,
+    cameraOverlayPosition,
     selfParticipantId,
     livestream,
     logs,
@@ -30,6 +33,9 @@ export const BroadcastApp = () => {
     setLinkedAt,
     setDailyStatus,
     setDesktopParticipantId,
+    setMobileParticipantId,
+    setMobileCameraEnabled,
+    setCameraOverlayPosition,
   } = useBroadcastStore()
 
   const { state: commsState, loading: commsLoading, error: commsError } = useCommunicationState()
@@ -73,15 +79,28 @@ export const BroadcastApp = () => {
 
   const localSessionId = useLocalSessionId()
   const localParticipant = useParticipant(localSessionId)
+  const mobileParticipant = useParticipant(mobileParticipantId ?? '')
   const isScreenPreviewReady = localParticipant?.tracks?.screenVideo?.state === 'playable'
   const waitingForScreenFrame = derivedScreenStatus === 'sharing' && !isScreenPreviewReady
   const stageMessage = waitingForScreenFrame
     ? 'Controller link is syncing your screen feed...'
     : 'Select a source and start screen sharing to preview your broadcast.'
+  const mobileCameraReady = mobileParticipant?.tracks?.video?.state === 'playable'
+  const cameraParticipantId = mobileCameraEnabled && mobileParticipantId ? mobileParticipantId : null
+  const overlayDockLabel = cameraOverlayPosition === 'bottom' ? 'Bottom' : 'Top'
 
   const isScreenShareActive = derivedScreenStatus === 'sharing'
   const isLivestreamActive = derivedLiveStatus === 'live'
-  const lanCandidate = commsState?.lanAddresses?.[0] ?? commsState?.url ?? ''
+  const lanAddresses = commsState?.lanAddresses ?? []
+  const emulatorUrlCandidate =
+    lanAddresses.find((address) => address.includes('10.0.2.2') || address.includes('10.0.3.2')) ??
+    commsState?.url ??
+    ''
+  const physicalUrlCandidate =
+    lanAddresses.find((address) => !address.includes('10.0.2.2') && !address.includes('10.0.3.2')) ??
+    emulatorUrlCandidate
+  const [useEmulatorAddress, setUseEmulatorAddress] = useState(false)
+  const lanCandidate = useEmulatorAddress ? emulatorUrlCandidate : physicalUrlCandidate
   const [lanUrlInput, setLanUrlInput] = useState(lanCandidate)
   const [lanTouched, setLanTouched] = useState(false)
   const linkedSession = commsState?.linkedSession ?? null
@@ -107,15 +126,72 @@ export const BroadcastApp = () => {
   }, [linkedSession, setLinkedAt, setRoomName, setRoomUrl, setToken, setDailyStatus, derivedDailyStatus])
 
   useEffect(() => {
-    if (typeof commsState?.desktopParticipantId === 'string') {
-      setDesktopParticipantId(commsState.desktopParticipantId ?? '')
+    if (!commsState) {
+      return
     }
-  }, [commsState?.desktopParticipantId, setDesktopParticipantId])
+    setDesktopParticipantId(commsState.desktopParticipantId ?? '')
+    setMobileParticipantId(commsState.mobileParticipantId ?? '')
+    setMobileCameraEnabled(Boolean(commsState.mobileCameraEnabled))
+    setCameraOverlayPosition(commsState.mobileCameraPosition === 'bottom' ? 'bottom' : 'top')
+  }, [
+    commsState,
+    setCameraOverlayPosition,
+    setDesktopParticipantId,
+    setMobileCameraEnabled,
+    setMobileParticipantId,
+  ])
 
   const handleLanInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     setLanTouched(true)
     setLanUrlInput(event.target.value)
   }
+
+  const handleEmulatorToggle = (nextValue: boolean) => {
+    if (useEmulatorAddress === nextValue) {
+      return
+    }
+    setUseEmulatorAddress(nextValue)
+    const nextUrl = nextValue ? emulatorUrlCandidate : physicalUrlCandidate
+    if (nextUrl) {
+      setLanTouched(false)
+      setLanUrlInput(nextUrl)
+    }
+  }
+
+  const cameraPane = (
+    <StagePane>
+      <PaneLabel>MOBILE CAMERA FEED • {cameraParticipantId ? overlayDockLabel : 'WAITING'}</PaneLabel>
+      <CameraPane>
+        {cameraParticipantId && mobileCameraReady ? (
+          <CameraVideo sessionId={cameraParticipantId} type="video" muted autoPlay />
+        ) : (
+          <PanePlaceholder>Waiting for the mobile camera feed…</PanePlaceholder>
+        )}
+      </CameraPane>
+    </StagePane>
+  )
+
+  const screenPane = (
+    <StagePane>
+      <PaneLabel>DESKTOP SCREEN FEED</PaneLabel>
+      <ScreenPane>
+        {isScreenPreviewReady ? (
+          <StagePreviewVideo
+            sessionId={localSessionId}
+            type="screenVideo"
+            fit="contain"
+            muted={isPreviewMuted}
+            autoPlay
+          />
+        ) : (
+          <PanePlaceholder>
+            <PlaceholderIcon>🖥️</PlaceholderIcon>
+            <p>{stageMessage}</p>
+          </PanePlaceholder>
+        )}
+      </ScreenPane>
+    </StagePane>
+  )
 
   return (
     <AppShell>
@@ -139,6 +215,9 @@ export const BroadcastApp = () => {
           </StatusPill>
           <StatusPill $state={isLivestreamActive ? 'success' : 'default'}>
             Livestream: {derivedLiveStatus.toUpperCase()}
+          </StatusPill>
+          <StatusPill $state={mobileCameraEnabled ? 'success' : 'default'}>
+            Mobile Cam: {mobileCameraEnabled ? 'ON' : 'OFF'}
           </StatusPill>
         </HeaderStatusGroup>
       </Header>
@@ -222,21 +301,16 @@ export const BroadcastApp = () => {
           </StageHeader>
           <StageContent>
             <StageSurface>
-              {isScreenPreviewReady ? (
-                <StagePreviewVideo
-                  sessionId={localSessionId}
-                  type="screenVideo"
-                  fit="contain"
-                  muted={isPreviewMuted}
-                  autoPlay
-                />
+              {cameraOverlayPosition === 'top' ? (
+                <>
+                  {cameraPane}
+                  {screenPane}
+                </>
               ) : (
-                <StagePlaceholder>
-                  <StagePlaceholderContent>
-                    <PlaceholderIcon>🖥️</PlaceholderIcon>
-                    <p>{stageMessage}</p>
-                  </StagePlaceholderContent>
-                </StagePlaceholder>
+                <>
+                  {screenPane}
+                  {cameraPane}
+                </>
               )}
             </StageSurface>
 
@@ -244,6 +318,17 @@ export const BroadcastApp = () => {
               <Panel>
                 <PanelHeading>Controller Link</PanelHeading>
                 <FieldHint>Share your desktop LAN URL with the Sonic mobile app. Once it connects, the room will sync automatically.</FieldHint>
+                <FieldGroup>
+                  <label>Using emulator</label>
+                  <ToggleRow>
+                    <ToggleButton type="button" $active={useEmulatorAddress} onClick={() => handleEmulatorToggle(true)}>
+                      On
+                    </ToggleButton>
+                    <ToggleButton type="button" $active={!useEmulatorAddress} onClick={() => handleEmulatorToggle(false)}>
+                      Off
+                    </ToggleButton>
+                  </ToggleRow>
+                </FieldGroup>
                 <FieldGroup>
                   <label htmlFor="lanUrlInput">LAN URL</label>
                   <PairingInputRow>
@@ -303,6 +388,20 @@ export const BroadcastApp = () => {
                           : 'Desktop will broadcast an ID after it joins the room'}
                       </small>
                     </div>
+                  </PairingStatus>
+                </FieldGroup>
+                <FieldGroup>
+                  <label>Mobile Camera</label>
+                  <PairingStatus>
+                    <div>
+                      <strong>{mobileCameraEnabled ? 'Streaming' : 'Offline'}</strong>
+                      <small>
+                        {mobileParticipantId
+                          ? `Participant ${mobileParticipantId}`
+                          : 'Waiting for the controller to share its participant ID'}
+                      </small>
+                    </div>
+                    <span>{`Dock: ${overlayDockLabel}`}</span>
                   </PairingStatus>
                 </FieldGroup>
                 <Divider />
@@ -478,7 +577,7 @@ const Input = styled.input`
 const ToggleRow = styled.div`
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: space-around;
   gap: 12px;
 `
 
@@ -553,44 +652,49 @@ const GhostButton = styled(ButtonBase)`
     transform: translateY(-1px);
     border-color: ${({ theme }) => theme.colors.accent};
   }
+
+`
+
+const StageSurface = styled.div`
+  flex: 1 0 420px;
+  background: ${({ theme }) => theme.colors.backgroundSecondary};
+  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 `
 
 const StageHeader = styled.div`
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 4px 4px 0;
 `
 
-const StageTitle = styled.h2`
+const StageTitle = styled.h3`
   margin: 0;
-  font-family: ${({ theme }) => theme.fonts.heading};
+  font-size: 1.1rem;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
 `
 
 const StageStatusBar = styled.div`
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: ${({ theme }) => theme.colors.backgroundSecondary};
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: 0.85rem;
-`
-
-const StageSurface = styled.div`
-  position: relative;
-  flex: 1 0 360px;
-  min-height: 360px;
-  background: ${({ theme }) => theme.colors.backgroundSecondary};
-  border: 1px solid ${({ theme }) => theme.colors.border};
-  border-radius: 18px;
-  overflow: hidden;
   display: flex;
   align-items: center;
-  justify-content: center;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  gap: 8px;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: ${({ theme }) => theme.colors.textSecondary};
+`
+
+const InfoPanels = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
 `
 
 const StagePreviewVideo = styled(DailyVideo)`
@@ -600,33 +704,61 @@ const StagePreviewVideo = styled(DailyVideo)`
   background: #000;
 `
 
-const StagePlaceholder = styled.div`
+const StagePane = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`
+
+const PaneLabel = styled.span`
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  text-transform: uppercase;
+`
+
+const CameraPane = styled.div`
+  border-radius: 16px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  height: 220px;
+  overflow: hidden;
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.5);
+`
+
+const ScreenPane = styled.div`
+  flex: 1;
+  min-height: 260px;
+  border-radius: 16px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.4);
+`
+
+const CameraVideo = styled(DailyVideo)`
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+`
+
+const PanePlaceholder = styled.div`
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  padding: 48px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`
-
-const StagePlaceholderContent = styled.div`
-  display: flex;
-  flex-direction: column;
-  align-items: center;
   gap: 12px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
   text-align: center;
-  max-width: 320px;
 `
 
 const PlaceholderIcon = styled.span`
-  font-size: 2.5rem;
-`
-
-const InfoPanels = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 24px;
+  font-size: 2rem;
+  opacity: 0.5;
 `
 
 const LogsContainer = styled.div`
